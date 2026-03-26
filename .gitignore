@@ -1,0 +1,14 @@
+# Python
+**/__pycache__/
+**/*.pyc
+
+# Generated backend data (caches/outputs)
+backend/data/*.json
+
+# Node / build output
+**/node_modules/
+frontend/dist/
+
+# OS/editor
+.DS_Store
+Thumbs.db
