@@ -1,11 +1,9 @@
-import { ThemeLeaderboard } from "./components/ThemeLeaderboard";
+import { ThemeDashboard } from "./components/ThemeDashboard";
 
-function App() {
+export default function App() {
   return (
-    <main className="h-screen overflow-hidden bg-terminal-bg p-0 text-slate-100">
-      <ThemeLeaderboard />
-    </main>
+    <div className="h-screen w-screen bg-terminal-bg">
+      <ThemeDashboard />
+    </div>
   );
 }
-
-export default App;
