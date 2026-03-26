@@ -53,6 +53,7 @@ type ApiPayload = {
   vix: { symbol: string; close: number; change_pct: number };
   themes: ApiTheme[];
   leaderboardMeta?: { view?: string; source?: string; perfNote?: string; url?: string; urls?: { overview?: string; performance?: string } };
+  tape?: { label: string; symbol: string; close: number | null; change_pct: number | null }[];
   marketFlowSummary?: {
     aggregateDollarVolume: number;
     previousAggregateDollarVolume: number;
@@ -417,6 +418,23 @@ function useThemesPayload() {
   return { payload, error };
 }
 
+function TapeStrip({ tape }: { tape: { label: string; symbol: string; close: number | null; change_pct: number | null }[] | undefined }) {
+  if (!tape?.length) return null;
+  return (
+    <div className="shrink-0 border-b border-terminal-border bg-terminal-bg px-4 py-2">
+      <div className="flex flex-wrap items-center gap-x-6 gap-y-1 text-[11px]">
+        {tape.slice(0, 8).map((t) => (
+          <div key={`${t.symbol}-${t.label}`} className="flex items-baseline gap-2">
+            <span className="font-mono text-slate-400">{t.label}</span>
+            <span className="font-mono font-semibold text-slate-200 tabular-nums">{t.close == null ? "—" : fmtPrice(t.close)}</span>
+            <span className={`font-mono tabular-nums ${pctClass(t.change_pct ?? 0)}`}>{fmtPct(t.change_pct, 2)}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function usePremarketBrief() {
   const [brief, setBrief] = useState<PremarketBrief | null>(null);
   const [loading, setLoading] = useState(false);
@@ -663,6 +681,27 @@ function ScannerView({
   }, [themes, spotlightThemeName, filteredThemes, sortedThemes]);
 
   const { data: uniSpotlight } = useUniverseSpotlight(spotlightTheme?.theme ?? null);
+  const constituents = useMemo(() => {
+    const list = spotlightTheme?.stocks ?? [];
+    if (!list.length) return [];
+    const scored = list
+      .map((s) => ({
+        ticker: s.ticker,
+        close: s.close,
+        today: s.today_return_pct ?? null,
+        adr: s.adr_pct,
+        addv: s.avg_dollar_volume,
+        grade: s.gradeLabel,
+      }))
+      .filter((x) => x.ticker);
+    scored.sort((a, b) => {
+      const ga = a.grade === "A+" ? 2 : a.grade === "A" ? 1 : 0;
+      const gb = b.grade === "A+" ? 2 : b.grade === "A" ? 1 : 0;
+      if (gb !== ga) return gb - ga;
+      return (b.addv ?? 0) - (a.addv ?? 0);
+    });
+    return scored.slice(0, 12);
+  }, [spotlightTheme]);
 
   return (
     <div className="flex h-full min-h-0 w-full min-w-0 flex-1 flex-row gap-3 overflow-hidden">
@@ -790,6 +829,43 @@ function ScannerView({
                       ) : null}
                     </div>
                   </>
+                )}
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-terminal-border bg-terminal-card shadow-sm">
+              <header className="border-b border-terminal-border px-4 py-3">
+                <h3 className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Leader Constituents</h3>
+                <p className="mt-0.5 text-[10px] text-slate-600">Top names (grade + liquidity)</p>
+              </header>
+              <div className="px-4 py-3">
+                {constituents.length ? (
+                  <div className="grid grid-cols-2 gap-2">
+                    {constituents.map((c) => {
+                      const href = `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(`NASDAQ:${c.ticker}`)}`;
+                      return (
+                        <a
+                          key={c.ticker}
+                          href={href}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="rounded-lg border border-terminal-border bg-terminal-bg/40 px-2.5 py-2 hover:border-slate-600"
+                        >
+                          <div className="flex items-baseline justify-between gap-2">
+                            <span className="font-mono text-[12px] font-semibold text-accent">{c.ticker}</span>
+                            <span className="text-[10px] font-semibold text-slate-500">{c.grade}</span>
+                          </div>
+                          <div className="mt-1 flex items-baseline justify-between gap-2">
+                            <span className="font-mono text-[11px] text-slate-300">{fmtPrice(c.close)}</span>
+                            <span className={`font-mono text-[11px] tabular-nums ${pctClass(c.today ?? 0)}`}>{fmtPct(c.today, 2)}</span>
+                          </div>
+                          <p className="mt-1 text-[9px] text-slate-600">ADDV {formatMoney(c.addv)}</p>
+                        </a>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <p className="text-xs text-slate-500">No constituents available for this theme.</p>
                 )}
               </div>
             </div>
@@ -1127,6 +1203,8 @@ export function ThemeDashboard() {
           <div className="flex items-center gap-2" />
         </div>
       </header>
+
+      <TapeStrip tape={payload?.tape} />
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <div className="shrink-0 border-b border-terminal-border bg-terminal-bg px-4 py-3">
