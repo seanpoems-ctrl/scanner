@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+beautifulsoup4
+yfinance
+httpx
+pandas>=2.0
+exchange-calendars>=4.5
+wordninja>=2.0.0
+tradingview-screener>=3.1.0
