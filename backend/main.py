@@ -25,15 +25,22 @@ from backend.scraper import (
 from backend.theme_universe import ThemeUniverseStore, scheduled_refresh_loop
 from backend.news_brief import (
     PremarketBriefStore,
-    PostmarketBriefStore,
     scheduled_premarket_loop,
-    scheduled_postmarket_loop,
     generate_premarket_brief,
-    generate_postmarket_brief,
-    is_nyse_trading_day_et,
 )
 
 import yfinance as yf
+
+# Minimal gate: allow manual refresh any weekday.
+def _is_weekday_et() -> bool:
+    try:
+        from zoneinfo import ZoneInfo
+
+        now_et = datetime.now(tz=ZoneInfo("America/New_York"))
+        return now_et.weekday() < 5
+    except Exception:
+        # If timezone info fails, don't block refresh.
+        return True
 
 # Per-view cache with short TTL so polling refreshes Finviz-backed leaderboards.
 _CACHE: dict[str, tuple[float, dict]] = {}
@@ -41,9 +48,7 @@ _CACHE_TTL_SEC = 55.0
 _THEME_UNIVERSE = ThemeUniverseStore()
 _UNIVERSE_TASK: asyncio.Task[None] | None = None
 _NEWS_STORE = PremarketBriefStore()
-_POST_NEWS_STORE = PostmarketBriefStore()
 _NEWS_TASK: asyncio.Task[None] | None = None
-_POST_NEWS_TASK: asyncio.Task[None] | None = None
 
 _PREMARKET_GAP_CACHE: dict[str, tuple[float, dict]] = {}
 _PREMARKET_GAP_TTL_SEC = 50.0
@@ -180,26 +185,22 @@ async def get_themes(view: str = "themes") -> dict:
 
 @app.on_event("startup")
 async def _startup() -> None:
-    global _UNIVERSE_TASK, _NEWS_TASK, _POST_NEWS_TASK
+    global _UNIVERSE_TASK, _NEWS_TASK
     await _THEME_UNIVERSE.load()
     # Refresh movers every 30 minutes (prices change; tickers-only automation).
     _UNIVERSE_TASK = asyncio.create_task(scheduled_refresh_loop(_THEME_UNIVERSE, every_sec=30 * 60))
     _NEWS_TASK = asyncio.create_task(scheduled_premarket_loop(_NEWS_STORE))
-    _POST_NEWS_TASK = asyncio.create_task(scheduled_postmarket_loop(_POST_NEWS_STORE))
 
 
 @app.on_event("shutdown")
 async def _shutdown() -> None:
-    global _UNIVERSE_TASK, _NEWS_TASK, _POST_NEWS_TASK
+    global _UNIVERSE_TASK, _NEWS_TASK
     if _UNIVERSE_TASK is not None:
         _UNIVERSE_TASK.cancel()
         _UNIVERSE_TASK = None
     if _NEWS_TASK is not None:
         _NEWS_TASK.cancel()
         _NEWS_TASK = None
-    if _POST_NEWS_TASK is not None:
-        _POST_NEWS_TASK.cancel()
-        _POST_NEWS_TASK = None
 
 
 @app.get("/api/news/premarket")
@@ -210,31 +211,13 @@ async def get_premarket_brief() -> dict:
 
 @app.post("/api/news/premarket/refresh")
 async def refresh_premarket_brief() -> dict:
-    if not is_nyse_trading_day_et():
+    if not _is_weekday_et():
         raise HTTPException(
             status_code=400,
             detail="Pre-market briefs are generated on NYSE trading days only.",
         )
     payload = await generate_premarket_brief()
     await _NEWS_STORE.save(payload)
-    return payload
-
-
-@app.get("/api/news/postmarket")
-async def get_postmarket_brief() -> dict:
-    cached = await _POST_NEWS_STORE.load()
-    return cached or {"generated_at_utc": None, "scheduled_for_et": None, "sections": [], "headlines": []}
-
-
-@app.post("/api/news/postmarket/refresh")
-async def refresh_postmarket_brief() -> dict:
-    if not is_nyse_trading_day_et():
-        raise HTTPException(
-            status_code=400,
-            detail="Post-market briefs are generated on NYSE trading days only.",
-        )
-    payload = await generate_postmarket_brief()
-    await _POST_NEWS_STORE.save(payload)
     return payload
 
 
