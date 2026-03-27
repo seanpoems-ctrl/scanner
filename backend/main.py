@@ -77,6 +77,8 @@ _PRE_NEWS_STORE = PremarketBriefStore()
 _POST_NEWS_STORE = PostmarketBriefStore()
 _PRE_NEWS_TASK: asyncio.Task[None] | None = None
 _POST_NEWS_TASK: asyncio.Task[None] | None = None
+_PRE_NEWS_REFRESH_TASK: asyncio.Task[None] | None = None
+_POST_NEWS_REFRESH_TASK: asyncio.Task[None] | None = None
 
 # Best solution: scheduled refresh + stale-while-revalidate snapshots.
 _THEMES_REFRESH_SEC = 15 * 60  # refresh cadence for heavy scrapes
@@ -394,9 +396,21 @@ async def refresh_premarket_brief() -> dict:
             status_code=400,
             detail="Pre-market briefs are generated on NYSE trading days only.",
         )
-    payload = await generate_premarket_brief()
-    await _PRE_NEWS_STORE.save(payload)
-    return payload
+    global _PRE_NEWS_REFRESH_TASK
+
+    if _PRE_NEWS_REFRESH_TASK is None or _PRE_NEWS_REFRESH_TASK.done():
+        async def _run() -> None:
+            payload = await generate_premarket_brief()
+            await _PRE_NEWS_STORE.save(payload)
+
+        _PRE_NEWS_REFRESH_TASK = asyncio.create_task(_run())
+
+    cached = await _PRE_NEWS_STORE.load()
+    return {
+        "status": "refreshing",
+        "generated_at_utc": (cached or {}).get("generated_at_utc"),
+        "scheduled_for_et": (cached or {}).get("scheduled_for_et"),
+    }
 
 
 @app.get("/api/news/postmarket")
@@ -409,9 +423,21 @@ async def get_postmarket_brief() -> dict:
 async def refresh_postmarket_brief() -> dict:
     if not _is_weekday_et():
         raise HTTPException(status_code=400, detail="Post-market briefs are generated on NYSE trading days only.")
-    payload = await generate_postmarket_brief()
-    await _POST_NEWS_STORE.save(payload)
-    return payload
+    global _POST_NEWS_REFRESH_TASK
+
+    if _POST_NEWS_REFRESH_TASK is None or _POST_NEWS_REFRESH_TASK.done():
+        async def _run() -> None:
+            payload = await generate_postmarket_brief()
+            await _POST_NEWS_STORE.save(payload)
+
+        _POST_NEWS_REFRESH_TASK = asyncio.create_task(_run())
+
+    cached = await _POST_NEWS_STORE.load()
+    return {
+        "status": "refreshing",
+        "generated_at_utc": (cached or {}).get("generated_at_utc"),
+        "scheduled_for_et": (cached or {}).get("scheduled_for_et"),
+    }
 
 
 @app.get("/api/market/status")

@@ -67,12 +67,49 @@ async def _fetch_google_news_rss(
         return []
     url = "https://news.google.com/rss/search"
     params = {"q": q, "hl": hl, "gl": gl, "ceid": ceid}
-    async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
+    async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
         r = await client.get(url, params=params, headers={"User-Agent": "Mozilla/5.0"})
         r.raise_for_status()
         xml = r.text
 
     # Minimal RSS parsing without extra deps.
+    import xml.etree.ElementTree as ET
+
+    try:
+        root = ET.fromstring(xml)
+    except ET.ParseError:
+        return []
+    items: list[dict[str, str]] = []
+    for item in root.findall(".//item"):
+        title = (item.findtext("title") or "").strip()
+        link = (item.findtext("link") or "").strip()
+        pub = (item.findtext("pubDate") or "").strip()
+        if not title:
+            continue
+        items.append({"title": title, "link": link, "pubDate": pub})
+        if len(items) >= limit:
+            break
+    return items
+
+
+async def _fetch_google_news_rss_with_client(
+    client: httpx.AsyncClient,
+    query: str,
+    *,
+    limit: int,
+    hl: str,
+    gl: str,
+    ceid: str,
+) -> list[dict[str, str]]:
+    q = (query or "").strip()
+    if not q:
+        return []
+    url = "https://news.google.com/rss/search"
+    params = {"q": q, "hl": hl, "gl": gl, "ceid": ceid}
+    r = await client.get(url, params=params, headers={"User-Agent": "Mozilla/5.0"})
+    r.raise_for_status()
+    xml = r.text
+
     import xml.etree.ElementTree as ET
 
     try:
@@ -175,13 +212,14 @@ async def _fetch_multi_news(
     per_query_limit: int = 6,
     total_limit: int = 12,
 ) -> list[dict[str, str]]:
-    tasks: list[asyncio.Future] = []
-    for q in queries:
-        for hl, gl, ceid in locales:
-            tasks.append(_fetch_google_news_rss(q, limit=per_query_limit, hl=hl, gl=gl, ceid=ceid))
-    if not tasks:
+    if not queries or not locales:
         return []
-    results = await asyncio.gather(*tasks, return_exceptions=True)
+    async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+        tasks: list[asyncio.Task] = []
+        for q in queries:
+            for hl, gl, ceid in locales:
+                tasks.append(asyncio.create_task(_fetch_google_news_rss_with_client(client, q, limit=per_query_limit, hl=hl, gl=gl, ceid=ceid)))
+        results = await asyncio.gather(*tasks, return_exceptions=True)
     merged: list[dict[str, str]] = []
     for r in results:
         if isinstance(r, Exception):
