@@ -200,8 +200,10 @@ app = FastAPI(title="POWER-THEME API", version="0.1.0")
 # Vite may use 5173, 5174, … if the default port is busy — allow any local dev origin.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[],
-    allow_origin_regex=r"http://(localhost|127\.0\.0\.1):\d+",
+    allow_origins=[
+        "https://scanner-gules-rho.vercel.app",
+    ],
+    allow_origin_regex=r"https://.*\.vercel\.app|http://(localhost|127\.0\.0\.1):\d+",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
