@@ -122,6 +122,52 @@ def _dedupe_headlines(items: list[dict[str, str]], *, limit: int) -> list[dict[s
     return out
 
 
+def _categorize_headline(title: str) -> str:
+    t = str(title or "").lower()
+    if any(k in t for k in ["cpi", "pce", "inflation", "ppi", "jobs", "payroll", "unemployment", "ism", "gdp", "retail sales", "consumer", "housing"]):
+        return "Macro"
+    if any(k in t for k in ["fed", "fomc", "powell", "ecb", "boe", "boj", "central bank", "rate", "rates", "yield", "treasury", "bond"]):
+        return "Rates"
+    if any(k in t for k in ["oil", "crude", "opec", "gas", "gold", "copper", "commodity", "commodities", "shipping", "freight"]):
+        return "Commodities"
+    if any(k in t for k in ["dollar", "usd", "eur", "yen", "cny", "yuan", "fx", "currency", "forex"]):
+        return "FX"
+    if any(k in t for k in ["war", "ceasefire", "missile", "attack", "sanction", "tariff", "geopolit", "china", "taiwan", "iran", "israel", "russia", "ukraine"]):
+        return "Geopolitics"
+    if any(k in t for k in ["earnings", "guidance", "beats", "misses", "raises", "lowers", "profit", "revenue", "after hours", "pre-market", "premarket"]):
+        return "Earnings"
+    return "News"
+
+
+def _build_catalyst_bullets(
+    *,
+    headlines: list[dict[str, str]],
+    limit: int = 5,
+) -> list[str]:
+    """
+    Turn the brief's catalyst "prompt" into a few actionable bullets.
+    We avoid long headline dumps by selecting a small, categorized set.
+    """
+    titles = [str(h.get("title") or "").strip() for h in (headlines or []) if str(h.get("title") or "").strip()]
+    if not titles:
+        return [
+            "Scan: Fed speakers, CPI/PCE, jobs data, large-cap earnings, and energy/FX shocks.",
+            "If rates/volatility are unstable, reduce size and demand cleaner confirmation at the open.",
+        ]
+
+    picked: list[str] = []
+    seen_cat: set[str] = set()
+    for title in titles:
+        cat = _categorize_headline(title)
+        if cat in seen_cat and cat not in {"News"}:
+            continue
+        seen_cat.add(cat)
+        picked.append(f"{cat}: {title}")
+        if len(picked) >= limit:
+            break
+    return picked
+
+
 async def _fetch_multi_news(
     *,
     queries: list[str],
@@ -303,18 +349,10 @@ def _build_narrative(macro: dict[str, Any], headlines: list[dict[str, str]]) -> 
         "Risk checks: confirm the first move with early breadth and liquidity, and stay alert to abrupt shifts in rates/vol."
     )
 
-    top_titles = [str(h.get("title") or "").strip() for h in (headlines or []) if str(h.get("title") or "").strip()]
-    top_titles = top_titles[:2]
-    if top_titles:
-        catalysts = (
-            "Catalyst risk stays elevated. Watch Fed speakers and the economic calendar (CPI/PCE, jobs, ISM), plus any energy/FX shocks. "
-            "Top headlines worth tracking: " + " / ".join(top_titles) + "."
-        )
-    else:
-        catalysts = (
-            "Catalyst risk stays elevated. Watch Fed speakers and the economic calendar (CPI/PCE, jobs, ISM), plus any energy/FX shocks "
-            "(confirm calendar for exact release times)."
-        )
+    catalysts = (
+        "Catalyst risk stays elevated. Watch Fed speakers and the economic calendar (CPI/PCE, jobs, ISM), plus any energy/FX shocks "
+        "(confirm calendar for exact release times)."
+    )
 
     actionable = (
         "Technical Levels, Leading Themes & Lessons: treat the open like a confirmation test. Keep sizing tight, "
@@ -408,11 +446,9 @@ def _build_postmarket_narrative(macro: dict[str, Any], headlines: list[dict[str,
             _fmt_move("US10Y", us10y),
         ]
     )
-    headline_hint = headlines[0]["title"] if headlines else "No major headlines captured."
     return [
         f"Close recap: {key_moves}.",
         "Focus: leadership, volatility, and breadth confirmation through the session (open → close).",
-        f"Top headline: {headline_hint}",
         "Actionable: size up only when volatility is contained and leaders confirm; otherwise protect gains and keep a tight watchlist.",
     ]
 
@@ -461,12 +497,8 @@ async def generate_postmarket_brief() -> dict[str, Any]:
             ],
         },
         {
-            "title": "Global macro headlines",
-            "bullets": [h["title"] for h in (global_headlines[:6] if global_headlines else [])] or ["—"],
-        },
-        {
-            "title": "US market headlines",
-            "bullets": [h["title"] for h in (us_headlines[:6] if us_headlines else [])] or ["—"],
+            "title": "Economic data / catalysts",
+            "bullets": _build_catalyst_bullets(headlines=headlines, limit=5),
         },
         {
             "title": "Plan for tomorrow",
@@ -574,22 +606,15 @@ async def generate_premarket_brief() -> dict[str, Any]:
             ],
         },
         {
-            "title": "Global macro headlines",
-            "bullets": [h["title"] for h in (global_headlines[:6] if global_headlines else [])] or ["—"],
-        },
-        {
-            "title": "US market headlines / catalysts",
-            "bullets": [
-                *([h["title"] for h in us_headlines[:6]] if us_headlines else []),
-                "Scan: Fed speakers, CPI/PCE, jobs data, large-cap earnings, and energy/FX shocks.",
-            ],
-        },
-        {
             "title": "Volatility + yields",
             "bullets": [
                 f"VIX { _num_str(vix.get('close')) } ({ _pct_str(vix.get('change_pct')) })",
                 f"US10Y { _num_str(us10y.get('close')) } ({ _pct_str(us10y.get('change_pct')) })",
             ],
+        },
+        {
+            "title": "Economic data / catalysts",
+            "bullets": _build_catalyst_bullets(headlines=headlines, limit=5),
         },
         {
             "title": "Actionable technicals / lessons",
