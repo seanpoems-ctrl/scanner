@@ -11,8 +11,12 @@ import httpx
 
 from zoneinfo import ZoneInfo
 
-from backend.scraper import fetch_series_snapshot
-from backend.market_time import is_nyse_trading_day_et
+try:
+    from backend.scraper import fetch_series_snapshot
+    from backend.market_time import is_nyse_trading_day_et
+except ModuleNotFoundError:
+    from scraper import fetch_series_snapshot
+    from market_time import is_nyse_trading_day_et
 
 NY_TZ = ZoneInfo("America/New_York")
 BRIEF_PATH = os.path.join(os.path.dirname(__file__), "data", "premarket_brief.json")

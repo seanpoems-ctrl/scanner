@@ -9,7 +9,10 @@ from typing import Any
 
 import yfinance as yf
 
-from backend.scraper import fetch_finviz_tickers_deterministic
+try:
+    from backend.scraper import fetch_finviz_tickers_deterministic
+except ModuleNotFoundError:
+    from scraper import fetch_finviz_tickers_deterministic
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
 UNIVERSE_PATH = DATA_DIR / "theme_universe.json"
