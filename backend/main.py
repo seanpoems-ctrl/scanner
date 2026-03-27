@@ -27,28 +27,111 @@ from backend.news_brief import (
     PremarketBriefStore,
     scheduled_premarket_loop,
     generate_premarket_brief,
+    PostmarketBriefStore,
+    scheduled_postmarket_loop,
+    generate_postmarket_brief,
 )
 
 import yfinance as yf
+from backend.market_time import is_nyse_trading_day_et, market_status_dict
+from backend.earnings import EarningsCache, next_earnings_for_tickers
 
-# Minimal gate: allow manual refresh any weekday.
+# Gate: market trading days only (XNYS).
 def _is_weekday_et() -> bool:
     try:
-        from zoneinfo import ZoneInfo
-
-        now_et = datetime.now(tz=ZoneInfo("America/New_York"))
-        return now_et.weekday() < 5
+        return is_nyse_trading_day_et(datetime.now(timezone.utc))
     except Exception:
         # If timezone info fails, don't block refresh.
         return True
 
 # Per-view cache with short TTL so polling refreshes Finviz-backed leaderboards.
 _CACHE: dict[str, tuple[float, dict]] = {}
-_CACHE_TTL_SEC = 55.0
+_CACHE_TTL_SEC = 55.0  # legacy per-request TTL (no longer primary gate)
 _THEME_UNIVERSE = ThemeUniverseStore()
 _UNIVERSE_TASK: asyncio.Task[None] | None = None
-_NEWS_STORE = PremarketBriefStore()
-_NEWS_TASK: asyncio.Task[None] | None = None
+_PRE_NEWS_STORE = PremarketBriefStore()
+_POST_NEWS_STORE = PostmarketBriefStore()
+_PRE_NEWS_TASK: asyncio.Task[None] | None = None
+_POST_NEWS_TASK: asyncio.Task[None] | None = None
+
+# Best solution: scheduled refresh + stale-while-revalidate snapshots.
+_THEMES_REFRESH_SEC = 15 * 60  # refresh cadence for heavy scrapes
+_THEMES_MAX_STALE_SEC = 6 * 60 * 60  # keep last-good for 6h even if upstream is down
+_THEMES_LOCKS: dict[str, asyncio.Lock] = {"themes": asyncio.Lock(), "industry": asyncio.Lock(), "scanner": asyncio.Lock()}
+_THEMES_TASK: asyncio.Task[None] | None = None
+
+_THEMES_META: dict[str, dict] = {
+    "themes": {"last_ok_monotonic": None, "last_ok_utc": None, "last_err": None, "refreshing": False},
+    "industry": {"last_ok_monotonic": None, "last_ok_utc": None, "last_err": None, "refreshing": False},
+    "scanner": {"last_ok_monotonic": None, "last_ok_utc": None, "last_err": None, "refreshing": False},
+}
+
+
+async def _refresh_themes_snapshot(key: str) -> None:
+    """
+    Refresh one snapshot and store it as last-known-good.
+    Never raises to callers; keeps previous snapshot on errors/429.
+    """
+    if key not in _THEMES_LOCKS:
+        return
+    lock = _THEMES_LOCKS[key]
+    if lock.locked():
+        return
+    async with lock:
+        _THEMES_META[key]["refreshing"] = True
+        try:
+            now = monotonic()
+            # Respect adaptive backoff: if active, don't hammer upstream.
+            active, _poll, _retry = _backoff_note(now)
+            if active:
+                return
+            payload = _attach_market_momentum(await build_theme_leaderboard(leader_view=key))
+            try:
+                payload["tape"] = await fetch_tradingview_tape()
+            except Exception:
+                payload["tape"] = payload.get("tape") or []
+            _on_upstream_ok(now)
+            _CACHE[key] = (now, payload)
+            _THEMES_META[key]["last_ok_monotonic"] = now
+            _THEMES_META[key]["last_ok_utc"] = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+            _THEMES_META[key]["last_err"] = None
+        except httpx.HTTPStatusError as e:
+            now = monotonic()
+            code = e.response.status_code if e.response is not None else None
+            if code == 429:
+                _on_upstream_429(now)
+                _THEMES_META[key]["last_err"] = "Upstream rate-limited (429). Keeping last snapshot."
+            else:
+                _THEMES_META[key]["last_err"] = f"Upstream HTTP error: {code}"
+        except YFRateLimitError:
+            now = monotonic()
+            _on_upstream_429(now)
+            _THEMES_META[key]["last_err"] = "Yahoo rate-limited (429). Keeping last snapshot."
+        except Exception as e:
+            _THEMES_META[key]["last_err"] = f"Refresh failed: {type(e).__name__}"
+        finally:
+            _THEMES_META[key]["refreshing"] = False
+
+
+async def _themes_refresh_loop() -> None:
+    # Warm cache early, then refresh on cadence.
+    await asyncio.sleep(0.2)
+    for k in ("themes", "industry"):
+        await _refresh_themes_snapshot(k)
+        await asyncio.sleep(0.25)
+
+    while True:
+        try:
+            # Refresh both primary views (themes + industry). Scanner/audit is heavier; refresh on-demand.
+            for k in ("themes", "industry"):
+                await _refresh_themes_snapshot(k)
+                await asyncio.sleep(0.25)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # Never crash loop.
+            pass
+        await asyncio.sleep(_THEMES_REFRESH_SEC)
 
 _PREMARKET_GAP_CACHE: dict[str, tuple[float, dict]] = {}
 _PREMARKET_GAP_TTL_SEC = 50.0
@@ -59,6 +142,8 @@ _TICKER_INTEL_TTL_SEC = 6 * 60.0
 
 _TICKER_SUGGEST_CACHE: dict[str, tuple[float, list[dict]]] = {}
 _TICKER_SUGGEST_TTL_SEC = 6 * 60.0
+
+_EARNINGS_CACHE = EarningsCache(ttl_sec=6 * 60.0)
 
 # Adaptive backoff for upstream 429s (Finviz/Yahoo). Frontend reads these headers.
 _POLL_BASE_SEC = 110.0
@@ -145,67 +230,134 @@ async def get_themes(view: str = "themes") -> dict:
         key = "themes"
     now = monotonic()
     cached = _CACHE.get(key)
-    if cached is not None and (now - cached[0]) < _CACHE_TTL_SEC:
-        _on_upstream_ok(now)
+
+    # Scanner/audit view can intermittently come back empty when upstream sources throttle.
+    # In that case, fall back to the regular themes snapshot so UI cards stay populated.
+    def _scanner_fallback_payload(base_payload: dict) -> dict:
+        if key != "scanner":
+            return base_payload
+        themes_rows = base_payload.get("themes") or []
+        if themes_rows:
+            return base_payload
+        themes_cached = _CACHE.get("themes")
+        if themes_cached is None:
+            return base_payload
+        merged = dict(themes_cached[1])
+        merged["snapshot_fallback"] = "themes"
+        return merged
+
+    # Serve last-known-good snapshot immediately (stale-while-revalidate).
+    if cached is not None:
+        age = now - cached[0]
         active, poll, retry = _backoff_note(now)
-        out = dict(cached[1])
+        out = _scanner_fallback_payload(dict(cached[1]))
         out["polling"] = {"pollSeconds": poll, "backoffActive": active, "retryAfterSeconds": retry}
+        out["snapshot"] = {
+            "key": key,
+            "served_from_cache": True,
+            "ageSeconds": int(age),
+            "last_ok_utc": _THEMES_META.get(key, {}).get("last_ok_utc"),
+            "refreshing": bool(_THEMES_META.get(key, {}).get("refreshing")),
+            "last_error": _THEMES_META.get(key, {}).get("last_err"),
+        }
+        # Kick a background refresh if stale and not already refreshing.
+        if age > _THEMES_REFRESH_SEC and not active:
+            asyncio.create_task(_refresh_themes_snapshot(key))
         return out
 
-    try:
-        payload = _attach_market_momentum(await build_theme_leaderboard(leader_view=key))
-    except httpx.HTTPStatusError as e:
-        code = e.response.status_code if e.response is not None else None
-        if code == 429:
-            wait = _on_upstream_429(now)
-            raise HTTPException(
-                status_code=429,
-                detail="Upstream rate-limited. Backing off.",
-                headers={"Retry-After": str(wait)},
-            )
-        raise
-    except YFRateLimitError:
-        wait = _on_upstream_429(now)
-        raise HTTPException(
-            status_code=429,
-            detail="Upstream rate-limited. Backing off.",
-            headers={"Retry-After": str(wait)},
-        )
-
-    _on_upstream_ok(now)
-    _CACHE[key] = (now, payload)
-    active, poll, retry = _backoff_note(now)
-    payload["polling"] = {"pollSeconds": poll, "backoffActive": active, "retryAfterSeconds": retry}
-    try:
-        payload["tape"] = await fetch_tradingview_tape()
-    except Exception:
-        payload["tape"] = []
-    return payload
+    # No snapshot yet: do a one-time blocking refresh (first load).
+    await _refresh_themes_snapshot(key)
+    cached2 = _CACHE.get(key)
+    if cached2 is None:
+        if key == "scanner":
+            themes_cached = _CACHE.get("themes")
+            if themes_cached is not None:
+                out_fallback = dict(themes_cached[1])
+                active, poll, retry = _backoff_note(monotonic())
+                out_fallback["snapshot_fallback"] = "themes"
+                out_fallback["polling"] = {"pollSeconds": poll, "backoffActive": active, "retryAfterSeconds": retry}
+                out_fallback["snapshot"] = {
+                    "key": key,
+                    "served_from_cache": True,
+                    "ageSeconds": int(monotonic() - themes_cached[0]),
+                    "last_ok_utc": _THEMES_META.get("themes", {}).get("last_ok_utc"),
+                    "refreshing": bool(_THEMES_META.get(key, {}).get("refreshing")),
+                    "last_error": _THEMES_META.get(key, {}).get("last_err"),
+                }
+                # Keep trying to refresh scanner view in background.
+                asyncio.create_task(_refresh_themes_snapshot(key))
+                return out_fallback
+        # Cold-start (or upstream down): serve a safe placeholder so the UI never blanks.
+        # A background refresh loop will keep trying.
+        active, poll, retry = _backoff_note(monotonic())
+        asyncio.create_task(_refresh_themes_snapshot(key))
+        return {
+            "vix": {"symbol": "^VIX", "close": 0.0, "change_pct": 0.0},
+            "themes": [],
+            "tape": [],
+            "market_momentum_score": {
+                "score": 0,
+                "state": "neutral",
+                "message": "Data warming up. Showing placeholder snapshot.",
+                "aPlusCount": 0,
+                "aCount": 0,
+            },
+            "polling": {"pollSeconds": poll, "backoffActive": active, "retryAfterSeconds": retry},
+            "snapshot": {
+                "key": key,
+                "served_from_cache": False,
+                "ageSeconds": None,
+                "last_ok_utc": _THEMES_META.get(key, {}).get("last_ok_utc"),
+                "refreshing": True,
+                "last_error": _THEMES_META.get(key, {}).get("last_err"),
+            },
+        }
+    out2 = dict(cached2[1])
+    out2 = _scanner_fallback_payload(out2)
+    active, poll, retry = _backoff_note(monotonic())
+    out2["polling"] = {"pollSeconds": poll, "backoffActive": active, "retryAfterSeconds": retry}
+    out2["snapshot"] = {
+        "key": key,
+        "served_from_cache": True,
+        "ageSeconds": int(monotonic() - cached2[0]),
+        "last_ok_utc": _THEMES_META.get(key, {}).get("last_ok_utc"),
+        "refreshing": bool(_THEMES_META.get(key, {}).get("refreshing")),
+        "last_error": _THEMES_META.get(key, {}).get("last_err"),
+    }
+    return out2
 
 
 @app.on_event("startup")
 async def _startup() -> None:
-    global _UNIVERSE_TASK, _NEWS_TASK
+    global _UNIVERSE_TASK, _PRE_NEWS_TASK, _POST_NEWS_TASK, _THEMES_TASK
     await _THEME_UNIVERSE.load()
     # Refresh movers every 30 minutes (prices change; tickers-only automation).
     _UNIVERSE_TASK = asyncio.create_task(scheduled_refresh_loop(_THEME_UNIVERSE, every_sec=30 * 60))
-    _NEWS_TASK = asyncio.create_task(scheduled_premarket_loop(_NEWS_STORE))
+    _PRE_NEWS_TASK = asyncio.create_task(scheduled_premarket_loop(_PRE_NEWS_STORE))
+    _POST_NEWS_TASK = asyncio.create_task(scheduled_postmarket_loop(_POST_NEWS_STORE))
+    _THEMES_TASK = asyncio.create_task(_themes_refresh_loop())
 
 
 @app.on_event("shutdown")
 async def _shutdown() -> None:
-    global _UNIVERSE_TASK, _NEWS_TASK
+    global _UNIVERSE_TASK, _PRE_NEWS_TASK, _POST_NEWS_TASK, _THEMES_TASK
     if _UNIVERSE_TASK is not None:
         _UNIVERSE_TASK.cancel()
         _UNIVERSE_TASK = None
-    if _NEWS_TASK is not None:
-        _NEWS_TASK.cancel()
-        _NEWS_TASK = None
+    if _PRE_NEWS_TASK is not None:
+        _PRE_NEWS_TASK.cancel()
+        _PRE_NEWS_TASK = None
+    if _POST_NEWS_TASK is not None:
+        _POST_NEWS_TASK.cancel()
+        _POST_NEWS_TASK = None
+    if _THEMES_TASK is not None:
+        _THEMES_TASK.cancel()
+        _THEMES_TASK = None
 
 
 @app.get("/api/news/premarket")
 async def get_premarket_brief() -> dict:
-    cached = await _NEWS_STORE.load()
+    cached = await _PRE_NEWS_STORE.load()
     return cached or {"generated_at_utc": None, "scheduled_for_et": None, "sections": [], "headlines": []}
 
 
@@ -217,8 +369,29 @@ async def refresh_premarket_brief() -> dict:
             detail="Pre-market briefs are generated on NYSE trading days only.",
         )
     payload = await generate_premarket_brief()
-    await _NEWS_STORE.save(payload)
+    await _PRE_NEWS_STORE.save(payload)
     return payload
+
+
+@app.get("/api/news/postmarket")
+async def get_postmarket_brief() -> dict:
+    cached = await _POST_NEWS_STORE.load()
+    return cached or {"generated_at_utc": None, "scheduled_for_et": None, "sections": [], "headlines": []}
+
+
+@app.post("/api/news/postmarket/refresh")
+async def refresh_postmarket_brief() -> dict:
+    if not _is_weekday_et():
+        raise HTTPException(status_code=400, detail="Post-market briefs are generated on NYSE trading days only.")
+    payload = await generate_postmarket_brief()
+    await _POST_NEWS_STORE.save(payload)
+    return payload
+
+
+@app.get("/api/market/status")
+async def get_market_status() -> dict:
+    """Lightweight market calendar status (ET-based)."""
+    return market_status_dict()
 
 
 @app.get("/api/scanner/premarket-gappers")
@@ -478,11 +651,19 @@ async def get_ticker_intel(ticker: str) -> dict:
     try:
         snap = await asyncio.to_thread(_fetch)
     except YFRateLimitError:
-        # If we already have a stale cache, serve it; otherwise report throttling.
+        # If we already have a stale cache, serve it; otherwise serve a safe fallback
+        # (avoid hard-failing UI drawers during upstream throttling).
         cached2 = _TICKER_INTEL_CACHE.get(t)
         if cached2 is not None:
             return cached2[1]
-        raise HTTPException(status_code=429, detail="Ticker lookup is temporarily rate-limited. Try again shortly.")
+        snap = {
+            "ticker": t,
+            "name": t,
+            "close": None,
+            "today_return_pct": 0.0,
+            "sector": "Unknown",
+            "industry": "Unknown",
+        }
 
     # Theme/subtheme membership from universe (can be multiple; we display primary + count).
     themes = await _THEME_UNIVERSE.list_themes()
@@ -590,3 +771,71 @@ async def ticker_suggest(q: str) -> dict:
     if results:
         _TICKER_SUGGEST_CACHE[key] = (now, results)
     return {"query": query, "results": results}
+
+
+@app.get("/api/earnings/next")
+async def get_next_earnings(
+    tickers: list[str] = FQuery(default=[]),
+) -> dict:
+    """
+    Best-effort next earnings timestamp (ET) for a list of tickers.
+    """
+    if not tickers:
+        return {"results": []}
+    results = await next_earnings_for_tickers(tickers, cache=_EARNINGS_CACHE)
+    return {"results": results}
+
+
+@app.get("/api/ticker/news")
+async def get_ticker_news(
+    ticker: str,
+    days: int = 90,
+) -> dict:
+    """
+    Best-effort ticker news/events from yfinance.
+    Returns a normalized list for the UI (last ~90 days by default).
+    """
+    raw = (ticker or "").strip().upper()
+    if not raw:
+        raise HTTPException(status_code=400, detail="ticker is required")
+    days = int(days or 90)
+    days = max(7, min(days, 365))
+    since = datetime.now(timezone.utc).timestamp() - (days * 24 * 3600)
+
+    def _fetch() -> list[dict]:
+        tk = yf.Ticker(raw)
+        items = getattr(tk, "news", None) or []
+        out: list[dict] = []
+        if isinstance(items, list):
+            for it in items[:80]:
+                if not isinstance(it, dict):
+                    continue
+                ts = it.get("providerPublishTime") or it.get("pubDate") or it.get("time")
+                try:
+                    ts_f = float(ts) if ts is not None else None
+                except Exception:
+                    ts_f = None
+                if ts_f is not None and ts_f < since:
+                    continue
+                dt = datetime.fromtimestamp(ts_f, tz=timezone.utc) if ts_f is not None else None
+                link = str(it.get("link") or it.get("url") or "").strip()
+                title = str(it.get("title") or "").strip()
+                if not title:
+                    continue
+                out.append(
+                    {
+                        "date_utc": dt.date().isoformat() if dt else None,
+                        "published_at_utc": dt.replace(microsecond=0).isoformat() if dt else None,
+                        "event_type": str(it.get("type") or it.get("publisher") or "News"),
+                        "title": title,
+                        "link": link or None,
+                        "source": str(it.get("publisher") or it.get("provider") or "yfinance"),
+                    }
+                )
+        return out
+
+    try:
+        rows = await asyncio.to_thread(_fetch)
+    except YFRateLimitError:
+        rows = []
+    return {"ticker": raw, "days": days, "results": rows}

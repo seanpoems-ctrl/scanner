@@ -40,6 +40,13 @@ MIN_AVG_DOLLAR_VOLUME = 100_000_000
 MIN_THEME_COUNT = 3
 MANUAL_OVERRIDE_TICKERS = ["AAOI", "AXTI", "NVDA", "RKLB", "TSLA"]
 
+# Leader column selection rubric (user-defined).
+LEADER_MIN_ADR_PCT = 4.0
+LEADER_MIN_AVG_DOLLAR_VOLUME = 80_000_000
+LEADER_MIN_MARKET_CAP = 2_000_000_000
+LEADER_MIN_PRICE = 12.0
+LEADER_MIN_RS_PCT = 85.0
+
 # Episodic Pivot (EP) scanner gates (all must pass for ep_candidate).
 EP_MIN_GAP_UP_PCT = 5.0
 EP_MIN_OR_RVOL_RATIO = 3.0  # ≥3× median prior sessions’ first-30m volume
@@ -164,6 +171,30 @@ class ThemeGroupPerformance:
     perf_month_pct: float | None
     perf_quarter_pct: float | None
     perf_half_pct: float | None
+
+
+def _return_pct_floor(values: list[float], pct: float) -> float:
+    if not values:
+        return float("inf")
+    p = max(0.0, min(100.0, float(pct)))
+    s = sorted(values)
+    # nearest-rank percentile
+    k = max(0, min(len(s) - 1, math.ceil((p / 100.0) * len(s)) - 1))
+    return float(s[k])
+
+
+def _passes_leader_rubric(stock: ThemeStock, *, rs_floor: float | None = None) -> bool:
+    """Leader gate: ADR, trend, liquidity, and market cap."""
+    # We store short/medium EMAs in `ema10`/`ema20` fields (close approximations of EMA9/EMA21).
+    above_ema9_ema21_ema50 = stock.close > stock.ema10 and stock.close > stock.ema20 and stock.close > stock.ema50
+    return (
+        stock.adr_pct > LEADER_MIN_ADR_PCT
+        and stock.close > LEADER_MIN_PRICE
+        and above_ema9_ema21_ema50
+        and stock.avg_dollar_volume > LEADER_MIN_AVG_DOLLAR_VOLUME
+        and stock.market_cap > LEADER_MIN_MARKET_CAP
+        and (rs_floor is None or stock.month_return_pct >= rs_floor)
+    )
 
 
 def _parse_compact_number(raw: str) -> float:
@@ -1035,6 +1066,7 @@ async def build_finviz_industry_leaderboard_rows() -> list[dict[str, Any]]:
         _fetch_finviz_document(FINVIZ_INDUSTRY_OVERVIEW_URL),
         _fetch_finviz_document(FINVIZ_INDUSTRY_PERF_URL),
     )
+    ind_filter_map = await fetch_finviz_industry_filter_map()
     h1, rows1 = _parse_finviz_groups_data_rows(ov_html)
     h2, rows2 = _parse_finviz_groups_data_rows(perf_html)
     ni1 = _header_exact_idx(h1, "name")
@@ -1138,6 +1170,29 @@ async def build_finviz_industry_leaderboard_rows() -> list[dict[str, Any]]:
         ),
         reverse=True,
     )
+
+    async def leaders_for_industry(name: str) -> list[str]:
+        ind_token = ind_filter_map.get(_normalize_group_name(name))
+        if not ind_token:
+            return []
+        screener_path = f"/screener.ashx?v=111&f={ind_token}&o=-volume"
+        tickers = await fetch_finviz_tickers_deterministic(screener_path, max_pages=2)
+        tickers = [t for t in tickers if t][:30]
+        if not tickers:
+            return []
+        snaps = await asyncio.gather(*(asyncio.to_thread(_build_stock_snapshot, t) for t in tickers))
+        stocks = [s for s in snaps if s is not None]
+        rs_floor = _return_pct_floor([s.month_return_pct for s in stocks], LEADER_MIN_RS_PCT)
+        passed = [s for s in stocks if _passes_leader_rubric(s, rs_floor=rs_floor)]
+        pool = passed if passed else stocks
+        pool.sort(key=lambda x: x.adr_pct, reverse=True)
+        return [s.ticker for s in pool[:5]]
+
+    enrich_n = min(25, len(themes))
+    leaders_lists = await asyncio.gather(*(leaders_for_industry(themes[i]["theme"]) for i in range(enrich_n)))
+    for i in range(enrich_n):
+        themes[i]["leaders"] = leaders_lists[i]
+
     logger.info("Finviz industry leaderboard: %d rows", len(themes))
     return themes
 
@@ -1684,6 +1739,9 @@ async def _build_leaderboard_screener_audit(
             continue
         logger.info("Scanning [%s]...", industry)
         ranked_members = sorted(members, key=lambda x: x.adr_pct, reverse=True)
+        rs_floor = _return_pct_floor([m.month_return_pct for m in ranked_members], LEADER_MIN_RS_PCT)
+        leader_candidates = [m for m in ranked_members if _passes_leader_rubric(m, rs_floor=rs_floor)]
+        leaders_for_display = leader_candidates if leader_candidates else ranked_members
         qualifying_a_plus = [m for m in ranked_members if m.qualifies_a_plus]
         qualifying_grade_a = [m for m in ranked_members if m.qualifies_grade_a]
         qualifying_for_display = qualifying_a_plus if qualifying_a_plus else qualifying_grade_a
@@ -1722,7 +1780,7 @@ async def _build_leaderboard_screener_audit(
                 "perf3M": None if perf_3m is None else round(perf_3m, 2),
                 "perf6M": None if perf_6m is None else round(perf_6m, 2),
                 "relativeStrengthQualifierRatio": qualifier_ratio,
-                "leaders": [m.ticker for m in ranked_members[:5]],
+                "leaders": [m.ticker for m in leaders_for_display[:5]],
                 "qualifiedCount": len(qualifying_for_display),
                 "aPlusCount": len(qualifying_a_plus),
                 "gradeACount": len(qualifying_grade_a),
@@ -1777,6 +1835,8 @@ async def _build_leaderboard_screener_audit(
             chunk = all_ranked[: min(5, len(all_ranked))]
             if not chunk:
                 break
+            rs_floor = _return_pct_floor([s.month_return_pct for s in chunk], LEADER_MIN_RS_PCT)
+            chunk_leaders = [s for s in chunk if _passes_leader_rubric(s, rs_floor=rs_floor)]
             themes.append(
                 {
                     "theme": f"Rotation Watchlist {idx}",
@@ -1790,7 +1850,7 @@ async def _build_leaderboard_screener_audit(
                     "relativeStrengthQualifierRatio": round(
                         (len([s for s in chunk if s.qualifies_grade_a]) / len(chunk)) * 100, 2
                     ),
-                    "leaders": [s.ticker for s in chunk],
+                    "leaders": [s.ticker for s in (chunk_leaders if chunk_leaders else chunk)],
                     "qualifiedCount": len([s for s in chunk if s.qualifies_grade_a]),
                     "aPlusCount": len([s for s in chunk if s.qualifies_a_plus]),
                     "gradeACount": len([s for s in chunk if s.qualifies_grade_a]),
@@ -1886,7 +1946,8 @@ async def build_theme_leaderboard(
             {
                 "view": "themes",
                 "source": "finviz_map_perf",
-                "url": FINVIZ_MAP_PERF_THEMES_BASE,
+                "url": f"{FINVIZ_BASE_URL}/map.ashx?t=themes",
+                "apiUrl": FINVIZ_MAP_PERF_THEMES_BASE,
                 "perfNote": (
                     "Finviz map_perf horizons: 1D=st:d1, 1W=w1, 1M≈w4, 3M≈w13, 6M≈w26. "
                     "1M RS uses the ~1M (w4) reading when present."

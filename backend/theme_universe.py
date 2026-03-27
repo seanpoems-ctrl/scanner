@@ -2,289 +2,261 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 import yfinance as yf
 
 from backend.scraper import fetch_finviz_tickers_deterministic
 
-UNIVERSE_PATH = os.path.join(os.path.dirname(__file__), "data", "theme_universe.json")
+DATA_DIR = Path(__file__).resolve().parent / "data"
+UNIVERSE_PATH = DATA_DIR / "theme_universe.json"
 
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
-def _normalize_label(s: str) -> str:
-    out = "".join(ch.lower() if ch.isalnum() else " " for ch in (s or ""))
-    return " ".join(out.split()).strip()
-
-
-def _slugify(s: str) -> str:
-    norm = _normalize_label(s)
-    return "-".join(norm.split())[:80] or "theme"
-
-
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class ThemeUniverseTheme:
     slug: str
     label: str
-    bucket: str
-    tickers: list[str]
-    # Optional: deterministic regeneration source (enables auto add/remove).
+    bucket: str = "Themes"
+    tickers: list[str] = field(default_factory=list)
     source: dict[str, Any] | None = None
+    notes: str | None = None
+    updated_at_utc: str | None = None
 
 
 class ThemeUniverseStore:
-    """
-    Persisted theme universe + in-memory movers cache.
-
-    Full auto add/remove requires each theme to have a deterministic `source`.
-    Without `source`, scheduled updates will still refresh movers for the tickers listed.
-    """
-
-    def __init__(self, path: str = UNIVERSE_PATH) -> None:
-        self.path = path
+    def __init__(self, path: Path | None = None) -> None:
+        self.path = path or UNIVERSE_PATH
         self._lock = asyncio.Lock()
-        self._raw: dict[str, Any] = {}
         self._themes: list[ThemeUniverseTheme] = []
-        self._movers_cache: dict[str, dict[str, Any]] = {}
-        self._loaded = False
+        self._updated_at_utc: str | None = None
+        self._movers_cache: dict[str, dict] = {}
 
     async def load(self) -> None:
         async with self._lock:
-            if self._loaded:
-                return
-            os.makedirs(os.path.dirname(self.path), exist_ok=True)
-            if not os.path.exists(self.path):
-                self._raw = {"updated_at": _utc_now_iso(), "themes": []}
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            if not self.path.exists():
                 self._themes = []
-                self._write_unlocked()
-            else:
-                with open(self.path, "r", encoding="utf-8") as f:
-                    self._raw = json.load(f)
-                self._themes = [self._parse_theme(t) for t in self._raw.get("themes", [])]
-            self._loaded = True
+                self._updated_at_utc = _utc_now_iso()
+                await self._save_locked()
+                return
+            try:
+                raw = self.path.read_text(encoding="utf-8").strip()
+            except Exception:
+                raw = ""
+            if not raw:
+                self._themes = []
+                self._updated_at_utc = _utc_now_iso()
+                await self._save_locked()
+                return
+            try:
+                data = json.loads(raw)
+            except Exception:
+                data = {}
+            rows = data.get("themes") if isinstance(data, dict) else []
+            parsed: list[ThemeUniverseTheme] = []
+            if isinstance(rows, list):
+                for r in rows:
+                    if not isinstance(r, dict):
+                        continue
+                    slug = str(r.get("slug") or "").strip()
+                    label = str(r.get("label") or "").strip()
+                    if not slug or not label:
+                        continue
+                    tickers = []
+                    for t in (r.get("tickers") or []):
+                        s = str(t or "").strip().upper()
+                        if s and s not in tickers:
+                            tickers.append(s)
+                    parsed.append(
+                        ThemeUniverseTheme(
+                            slug=slug,
+                            label=label,
+                            bucket=str(r.get("bucket") or "Themes"),
+                            tickers=tickers,
+                            source=r.get("source") if isinstance(r.get("source"), dict) else None,
+                            notes=str(r.get("notes")) if r.get("notes") is not None else None,
+                            updated_at_utc=str(r.get("updated_at_utc")) if r.get("updated_at_utc") else None,
+                        )
+                    )
+            self._themes = parsed
+            self._updated_at_utc = str(data.get("updated_at_utc")) if isinstance(data, dict) and data.get("updated_at_utc") else _utc_now_iso()
 
-    def _write_unlocked(self) -> None:
-        self._raw["updated_at"] = _utc_now_iso()
-        with open(self.path, "w", encoding="utf-8") as f:
-            json.dump(self._raw, f, indent=2, sort_keys=False)
-
-    @staticmethod
-    def _parse_theme(obj: dict[str, Any]) -> ThemeUniverseTheme:
-        slug = str(obj.get("slug") or "").strip()
-        label = str(obj.get("label") or "").strip()
-        bucket = str(obj.get("bucket") or "").strip()
-        tickers = [str(t).upper().strip() for t in (obj.get("tickers") or []) if str(t).strip()]
-        source = obj.get("source")
-        return ThemeUniverseTheme(slug=slug, label=label, bucket=bucket, tickers=tickers, source=source)
+    async def _save_locked(self) -> None:
+        payload = {
+            "updated_at_utc": self._updated_at_utc or _utc_now_iso(),
+            "themes": [asdict(t) for t in self._themes],
+        }
+        self.path.write_text(json.dumps(payload, ensure_ascii=True), encoding="utf-8")
 
     async def list_themes(self) -> list[ThemeUniverseTheme]:
-        await self.load()
-        return list(self._themes)
+        async with self._lock:
+            return [
+                ThemeUniverseTheme(
+                    slug=t.slug,
+                    label=t.label,
+                    bucket=t.bucket,
+                    tickers=list(t.tickers),
+                    source=dict(t.source) if isinstance(t.source, dict) else None,
+                    notes=t.notes,
+                    updated_at_utc=t.updated_at_utc,
+                )
+                for t in self._themes
+            ]
 
     async def find_by_label(self, label: str) -> ThemeUniverseTheme | None:
-        await self.load()
-        want = _normalize_label(label)
-        for t in self._themes:
-            if _normalize_label(t.label) == want:
-                return t
+        q = " ".join((label or "").strip().lower().split())
+        if not q:
+            return None
+        async with self._lock:
+            for t in self._themes:
+                if " ".join(t.label.lower().split()) == q:
+                    return ThemeUniverseTheme(
+                        slug=t.slug,
+                        label=t.label,
+                        bucket=t.bucket,
+                        tickers=list(t.tickers),
+                        source=dict(t.source) if isinstance(t.source, dict) else None,
+                        notes=t.notes,
+                        updated_at_utc=t.updated_at_utc,
+                    )
         return None
 
-    async def refresh_movers(self, theme: ThemeUniverseTheme) -> dict[str, Any]:
-        """
-        Compute top/bottom movers by today_return_pct for this theme's tickers.
-        """
-        await self.load()
-        tickers = [t for t in theme.tickers if t]
-        if not tickers:
-            payload = {"label": theme.label, "slug": theme.slug, "updated_at": _utc_now_iso(), "best": [], "worst": []}
-            async with self._lock:
-                self._movers_cache[theme.slug] = payload
-            return payload
+    async def get_cached_movers(self, theme: ThemeUniverseTheme) -> dict | None:
+        return self._movers_cache.get(theme.slug)
 
-        def _download() -> Any:
-            return yf.download(
-                tickers=tickers,
-                period="5d",
-                interval="1d",
-                group_by="ticker",
-                auto_adjust=False,
-                threads=True,
-                progress=False,
-            )
-
-        df = await asyncio.to_thread(_download)
-
-        movers: list[dict[str, Any]] = []
-        for tkr in tickers:
-            try:
-                closes = df["Close"].dropna() if len(tickers) == 1 else df[tkr]["Close"].dropna()
-                if len(closes) < 2:
-                    continue
-                close = float(closes.iloc[-1])
-                prev = float(closes.iloc[-2])
-                if prev <= 0:
-                    continue
-                chg = ((close - prev) / prev) * 100.0
-                movers.append({"ticker": tkr, "today_return_pct": round(chg, 2)})
-            except Exception:
-                continue
-
-        movers.sort(key=lambda x: x["today_return_pct"])
-        worst = movers[:3]
-        best = list(reversed(movers[-3:]))
-        payload = {"label": theme.label, "slug": theme.slug, "updated_at": _utc_now_iso(), "best": best, "worst": worst}
-        async with self._lock:
-            self._movers_cache[theme.slug] = payload
+    async def refresh_movers(self, theme: ThemeUniverseTheme) -> dict:
+        tickers = [str(t or "").strip().upper() for t in (theme.tickers or []) if str(t or "").strip()]
+        tickers = list(dict.fromkeys(tickers))[:60]
+        rows: list[dict[str, Any]] = []
+        if tickers:
+            rows = await asyncio.to_thread(_snapshot_today_returns, tickers)
+        rows.sort(key=lambda x: float(x.get("today_return_pct") or 0.0), reverse=True)
+        payload = {
+            "label": theme.label,
+            "slug": theme.slug,
+            "updated_at": _utc_now_iso(),
+            "best": rows[:8],
+            "worst": sorted(rows, key=lambda x: float(x.get("today_return_pct") or 0.0))[:8],
+        }
+        self._movers_cache[theme.slug] = payload
         return payload
 
-    async def get_cached_movers(self, theme: ThemeUniverseTheme) -> dict[str, Any] | None:
-        await self.load()
+    async def refresh_all_movers(self) -> dict:
+        themes = await self.list_themes()
+        refreshed = 0
+        for th in themes:
+            if not th.tickers:
+                continue
+            try:
+                await self.refresh_movers(th)
+                refreshed += 1
+            except Exception:
+                # best-effort only
+                continue
+        return {"refreshed": refreshed, "total_themes": len(themes), "updated_at_utc": _utc_now_iso()}
+
+    async def rebuild_all_tickers(self) -> dict:
         async with self._lock:
-            return self._movers_cache.get(theme.slug)
-
-    async def refresh_all_movers(self) -> dict[str, Any]:
-        """
-        Refresh movers for every theme (tickers-only automation).
-        """
-        await self.load()
-        themes = list(self._themes)
-        results = await asyncio.gather(*(self.refresh_movers(t) for t in themes))
-        return {"updated_at": _utc_now_iso(), "count": len(results)}
-
-    async def rebuild_tickers(self, theme: ThemeUniverseTheme) -> dict[str, Any]:
-        """
-        Deterministically rebuild `tickers` for a theme from its `source`.
-        Supported sources:
-          - {"type": "finviz_screener", "path": "/screener.ashx?..."}
-        """
-        await self.load()
-        src = theme.source or {}
-        if not isinstance(src, dict):
-            return {"slug": theme.slug, "label": theme.label, "rebuilt": False, "reason": "invalid source"}
-        if src.get("type") != "finviz_screener":
-            return {"slug": theme.slug, "label": theme.label, "rebuilt": False, "reason": "unsupported source type"}
-
-        path = str(src.get("path") or "").strip()
-        if not path:
-            return {"slug": theme.slug, "label": theme.label, "rebuilt": False, "reason": "missing source.path"}
-
-        max_pages = src.get("max_pages")
-        try:
-            max_pages_i = int(max_pages) if max_pages is not None else 10
-        except Exception:
-            max_pages_i = 10
-        max_pages_i = max(1, min(50, max_pages_i))
-
-        tickers = await fetch_finviz_tickers_deterministic(path, max_pages=max_pages_i)
-
-        async with self._lock:
-            raw_themes = self._raw.get("themes", [])
-            if not isinstance(raw_themes, list):
-                return {"slug": theme.slug, "label": theme.label, "rebuilt": False, "reason": "bad universe format"}
-            updated = False
-            for obj in raw_themes:
-                if not isinstance(obj, dict):
-                    continue
-                if str(obj.get("slug") or "").strip() != theme.slug:
-                    continue
-                obj["tickers"] = tickers
-                updated = True
-                break
-            if updated:
-                self._themes = [self._parse_theme(x) for x in raw_themes if isinstance(x, dict)]
-                self._write_unlocked()
-        return {"slug": theme.slug, "label": theme.label, "rebuilt": True, "tickers": len(tickers)}
-
-    async def rebuild_all_tickers(self) -> dict[str, Any]:
-        await self.load()
-        themes = [t for t in self._themes if isinstance(t.source, dict) and t.source.get("type")]
-        sem = asyncio.Semaphore(2)
-
-        async def run_one(t: ThemeUniverseTheme) -> dict[str, Any]:
-            async with sem:
-                try:
-                    return await self.rebuild_tickers(t)
-                except Exception as e:
-                    return {"slug": t.slug, "label": t.label, "rebuilt": False, "reason": str(e)}
-
-        results = await asyncio.gather(*(run_one(t) for t in themes))
-        rebuilt = sum(1 for r in results if r.get("rebuilt"))
-        failed = sum(1 for r in results if not r.get("rebuilt"))
-        return {
-            "updated_at": _utc_now_iso(),
-            "themes_with_source": len(themes),
-            "rebuilt": rebuilt,
-            "failed": failed,
-        }
-
-    async def upsert_themes(self, themes: list[dict[str, Any]]) -> dict[str, Any]:
-        """
-        Merge themes into `theme_universe.json` by `slug`.
-        Preserves existing tickers/source when the incoming object omits them.
-        """
-        await self.load()
-        async with self._lock:
-            existing = {str(t.get("slug") or ""): t for t in self._raw.get("themes", []) if isinstance(t, dict)}
-            added = 0
             updated = 0
-            for t in themes:
-                slug = str(t.get("slug") or "").strip() or _slugify(str(t.get("label") or ""))
-                incoming = {
-                    "slug": slug,
-                    "label": str(t.get("label") or "").strip(),
-                    "bucket": str(t.get("bucket") or "").strip(),
-                    "tickers": t.get("tickers"),
-                    "source": t.get("source"),
-                }
-                prior = existing.get(slug)
-                if prior is None:
-                    existing[slug] = {
-                        "slug": slug,
-                        "label": incoming["label"],
-                        "bucket": incoming["bucket"],
-                        "tickers": incoming["tickers"] if isinstance(incoming["tickers"], list) else [],
-                        "source": incoming["source"] if isinstance(incoming["source"], dict) else None,
-                    }
-                    added += 1
+            for t in self._themes:
+                src = t.source if isinstance(t.source, dict) else None
+                if not src or str(src.get("type") or "") != "finviz_screener":
                     continue
-
-                # Update label/bucket always; keep tickers/source unless explicitly provided.
-                prior["label"] = incoming["label"] or prior.get("label")
-                prior["bucket"] = incoming["bucket"] or prior.get("bucket")
-                if isinstance(incoming["tickers"], list):
-                    prior["tickers"] = incoming["tickers"]
-                if isinstance(incoming["source"], dict) or incoming["source"] is None:
-                    if "source" in t:
-                        prior["source"] = incoming["source"]
+                path = str(src.get("path") or "").strip()
+                if not path:
+                    continue
+                max_pages = src.get("max_pages")
+                try:
+                    mp = int(max_pages) if max_pages is not None else 10
+                except Exception:
+                    mp = 10
+                mp = max(1, min(mp, 40))
+                try:
+                    tickers = await fetch_finviz_tickers_deterministic(path, max_pages=mp)
+                except Exception:
+                    tickers = []
+                normalized = list(dict.fromkeys([str(x).strip().upper() for x in tickers if str(x).strip()]))
+                t.tickers = normalized
+                t.updated_at_utc = _utc_now_iso()
                 updated += 1
+            self._updated_at_utc = _utc_now_iso()
+            await self._save_locked()
+            return {"updated": updated, "total": len(self._themes), "updated_at": self._updated_at_utc}
 
-            merged = list(existing.values())
-            merged.sort(key=lambda x: (str(x.get("bucket") or ""), str(x.get("label") or "")))
-            self._raw["themes"] = merged
-            self._themes = [self._parse_theme(x) for x in merged]
-            self._write_unlocked()
-            return {"added": added, "updated": updated, "total": len(merged), "updated_at": self._raw["updated_at"]}
+    async def upsert_themes(self, upserts: list[dict]) -> dict:
+        added = 0
+        updated = 0
+        async with self._lock:
+            by_slug = {t.slug: t for t in self._themes}
+            for row in upserts:
+                if not isinstance(row, dict):
+                    continue
+                slug = str(row.get("slug") or "").strip()
+                label = str(row.get("label") or "").strip()
+                if not slug or not label:
+                    continue
+                bucket = str(row.get("bucket") or "Themes")
+                source = row.get("source") if isinstance(row.get("source"), dict) else None
+                existing = by_slug.get(slug)
+                if existing is None:
+                    th = ThemeUniverseTheme(
+                        slug=slug,
+                        label=label,
+                        bucket=bucket,
+                        tickers=[],
+                        source=source,
+                        updated_at_utc=_utc_now_iso(),
+                    )
+                    self._themes.append(th)
+                    by_slug[slug] = th
+                    added += 1
+                else:
+                    existing.label = label
+                    existing.bucket = bucket
+                    existing.source = source
+                    existing.updated_at_utc = _utc_now_iso()
+                    updated += 1
+            self._updated_at_utc = _utc_now_iso()
+            await self._save_locked()
+            return {"added": added, "updated": updated, "total": len(self._themes), "updated_at": self._updated_at_utc}
 
 
-async def scheduled_refresh_loop(store: ThemeUniverseStore, every_sec: float) -> None:
-    """
-    Simple in-process scheduler. Runs forever.
+def _snapshot_today_returns(tickers: list[str]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for t in tickers:
+        try:
+            tk = yf.Ticker(t)
+            hist = tk.history(period="5d", interval="1d")
+            if hist is None or hist.empty or len(hist) < 2:
+                continue
+            close = float(hist["Close"].iloc[-1])
+            prev = float(hist["Close"].iloc[-2])
+            if prev == 0:
+                continue
+            ret = ((close - prev) / prev) * 100.0
+            out.append({"ticker": t, "today_return_pct": round(ret, 2)})
+        except Exception:
+            continue
+    return out
 
-    Note: this keeps movers fresh; auto add/remove requires you to populate theme `source` rules.
-    """
-    await store.load()
+
+async def scheduled_refresh_loop(store: ThemeUniverseStore, every_sec: int = 30 * 60) -> None:
+    # Keep a warm movers cache for spotlight API.
+    await asyncio.sleep(1.0)
     while True:
         try:
-            await store.rebuild_all_tickers()
             await store.refresh_all_movers()
+        except asyncio.CancelledError:
+            raise
         except Exception:
-            # Keep loop alive; errors show up in server logs.
+            # never crash loop
             pass
-        await asyncio.sleep(every_sec)
+        await asyncio.sleep(max(60, int(every_sec)))
 

@@ -12,9 +12,11 @@ import httpx
 from zoneinfo import ZoneInfo
 
 from backend.scraper import fetch_series_snapshot
+from backend.market_time import is_nyse_trading_day_et
 
 NY_TZ = ZoneInfo("America/New_York")
 BRIEF_PATH = os.path.join(os.path.dirname(__file__), "data", "premarket_brief.json")
+POST_BRIEF_PATH = os.path.join(os.path.dirname(__file__), "data", "postmarket_brief.json")
 
 
 def _utc_now() -> datetime:
@@ -301,19 +303,123 @@ class PremarketBriefStore:
             self._cached = payload
 
 
+class PostmarketBriefStore(PremarketBriefStore):
+    def __init__(self, path: str = POST_BRIEF_PATH) -> None:
+        super().__init__(path=path)
+
+
 def next_release_et(now_utc: datetime | None = None) -> datetime:
     now = now_utc or _utc_now()
     now_et = now.astimezone(NY_TZ)
     target = now_et.replace(hour=8, minute=3, second=0, microsecond=0)
-    if now_et.weekday() >= 5:  # Sat/Sun
-        days = 7 - now_et.weekday()
-        target = target + timedelta(days=days)
-    elif now_et >= target:
-        # Next weekday
-        target = target + timedelta(days=1)
-        if target.weekday() >= 5:
-            target = target + timedelta(days=(7 - target.weekday()))
+    while True:
+        if now_et < target and is_nyse_trading_day_et(target.astimezone(timezone.utc)):
+            break
+        target = (target + timedelta(days=1)).replace(hour=8, minute=3, second=0, microsecond=0)
     return target
+
+
+def next_postmarket_release_et(now_utc: datetime | None = None) -> datetime:
+    now = now_utc or _utc_now()
+    now_et = now.astimezone(NY_TZ)
+    target = now_et.replace(hour=16, minute=33, second=0, microsecond=0)
+    while True:
+        if now_et < target and is_nyse_trading_day_et(target.astimezone(timezone.utc)):
+            break
+        target = (target + timedelta(days=1)).replace(hour=16, minute=33, second=0, microsecond=0)
+    return target
+
+
+def _build_postmarket_narrative(macro: dict[str, Any], headlines: list[dict[str, str]]) -> list[str]:
+    # This is a close-to-close summary template using the same macro snapshot symbols.
+    nq = macro.get("nasdaq_fut", {})
+    es = macro.get("spx_fut", {})
+    vix = macro.get("vix", {})
+    us10y = macro.get("us10y", {})
+    key_moves = ", ".join(
+        [
+            _fmt_move("NQ", nq),
+            _fmt_move("ES", es),
+            _fmt_move("VIX", vix),
+            _fmt_move("US10Y", us10y),
+        ]
+    )
+    headline_hint = headlines[0]["title"] if headlines else "No major headlines captured."
+    return [
+        f"Close recap: {key_moves}.",
+        "Focus: leadership, volatility, and breadth confirmation through the session (open → close).",
+        f"Top headline: {headline_hint}",
+        "Actionable: size up only when volatility is contained and leaders confirm; otherwise protect gains and keep a tight watchlist.",
+    ]
+
+
+async def generate_postmarket_brief() -> dict[str, Any]:
+    macro = await _fetch_macro_snapshot()
+    headlines = await _fetch_google_news_rss("US stock market close Fed earnings after hours", limit=8)
+
+    narrative = _build_postmarket_narrative(macro, headlines)
+    sections: list[dict[str, Any]] = [
+        {
+            "title": "Session recap (open → close)",
+            "bullets": [
+                f"Nasdaq (NQ1!) { _num_str(macro.get('nasdaq_fut', {}).get('close')) } ({ _pct_str(macro.get('nasdaq_fut', {}).get('change_pct')) })",
+                f"S&P 500 (ES1!) { _num_str(macro.get('spx_fut', {}).get('close')) } ({ _pct_str(macro.get('spx_fut', {}).get('change_pct')) })",
+                "Note: this is a macro snapshot; pair with your tape + theme leaders for the true session story.",
+            ],
+        },
+        {
+            "title": "Volatility + rates (risk gate)",
+            "bullets": [
+                f"VIX { _num_str(macro.get('vix', {}).get('close')) } ({ _pct_str(macro.get('vix', {}).get('change_pct')) })",
+                f"US10Y { _num_str(macro.get('us10y', {}).get('close')) } ({ _pct_str(macro.get('us10y', {}).get('change_pct')) })",
+                "If volatility expanded into the close, trim exposure and demand cleaner setups tomorrow.",
+            ],
+        },
+        {
+            "title": "Key headlines / catalysts",
+            "bullets": [h["title"] for h in (headlines[:6] if headlines else [])] or ["—"],
+        },
+        {
+            "title": "Plan for tomorrow",
+            "bullets": [
+                "Carry forward only the highest-quality leaders (A+ rubric) that held key EMAs into the close.",
+                "Prepare: earnings, macro prints, and any after-hours movers that can gap the open.",
+            ],
+        },
+    ]
+
+    now = _utc_now()
+    release_et = next_postmarket_release_et(now).astimezone(NY_TZ)
+    payload = {
+        "generated_at_utc": _iso(now),
+        "scheduled_for_et": _iso(release_et),
+        "macro": macro,
+        "narrative": narrative,
+        "sections": sections,
+        "headlines": headlines,
+        "source": {"markets": "tradingview", "news": "google_news_rss"},
+    }
+    return payload
+
+
+async def scheduled_postmarket_loop(store: PostmarketBriefStore) -> None:
+    """
+    In-process scheduler: generates the brief every weekday at 4:33pm ET.
+    """
+    while True:
+        try:
+            now = _utc_now()
+            nxt = next_postmarket_release_et(now)
+            sleep_for = max(5.0, (nxt.astimezone(timezone.utc) - now).total_seconds())
+            await asyncio.sleep(min(sleep_for, 60.0))
+            now2 = _utc_now()
+            now2_et = now2.astimezone(NY_TZ)
+            if is_nyse_trading_day_et(now2) and (now2_et.hour, now2_et.minute) == (16, 33):
+                payload = await generate_postmarket_brief()
+                await store.save(payload)
+                await asyncio.sleep(65.0)
+        except Exception:
+            await asyncio.sleep(10.0)
 
 
 async def generate_premarket_brief() -> dict[str, Any]:
@@ -396,7 +502,7 @@ async def scheduled_premarket_loop(store: PremarketBriefStore) -> None:
             # Re-check each minute; run once we're past target time.
             now2 = _utc_now()
             now2_et = now2.astimezone(NY_TZ)
-            if now2_et.weekday() < 5 and (now2_et.hour, now2_et.minute) == (8, 3):
+            if is_nyse_trading_day_et(now2) and (now2_et.hour, now2_et.minute) == (8, 3):
                 payload = await generate_premarket_brief()
                 await store.save(payload)
                 # Prevent double-run within the same minute.

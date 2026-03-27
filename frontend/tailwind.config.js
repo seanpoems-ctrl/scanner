@@ -5,14 +5,12 @@ export default {
     extend: {
       colors: {
         terminal: {
-          bg: "#0B0E11",
-          card: "#151921",
-          border: "#252B36",
+          bg: "#020617",
+          elevated: "#0b1220",
+          card: "#0f172a",
+          border: "#1e293b",
         },
-        grade: {
-          aplus: "#2EE59D",
-          a: "#2EBFF5",
-        },
+        accent: "#22d3ee",
       },
     },
   },
