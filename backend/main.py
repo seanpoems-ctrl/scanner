@@ -13,28 +13,52 @@ from time import monotonic
 
 from yfinance.exceptions import YFRateLimitError
 
-from backend.premarket_tv import PremarketTvParams, run_premarket_tv_scan_sync
-from backend.scraper import (
-    build_theme_leaderboard,
-    extract_us_ticker_from_tv_scan_row,
-    fetch_finviz_industry_filter_map,
-    fetch_finviz_short_float_pct_batch,
-    fetch_yfinance_short_percent_float_pct_batch,
-    fetch_tradingview_tape,
-)
-from backend.theme_universe import ThemeUniverseStore, scheduled_refresh_loop
-from backend.news_brief import (
-    PremarketBriefStore,
-    scheduled_premarket_loop,
-    generate_premarket_brief,
-    PostmarketBriefStore,
-    scheduled_postmarket_loop,
-    generate_postmarket_brief,
-)
+try:
+    # Local package-style imports (used in local dev from repo root).
+    from backend.premarket_tv import PremarketTvParams, run_premarket_tv_scan_sync
+    from backend.scraper import (
+        build_theme_leaderboard,
+        extract_us_ticker_from_tv_scan_row,
+        fetch_finviz_industry_filter_map,
+        fetch_finviz_short_float_pct_batch,
+        fetch_yfinance_short_percent_float_pct_batch,
+        fetch_tradingview_tape,
+    )
+    from backend.theme_universe import ThemeUniverseStore, scheduled_refresh_loop
+    from backend.news_brief import (
+        PremarketBriefStore,
+        scheduled_premarket_loop,
+        generate_premarket_brief,
+        PostmarketBriefStore,
+        scheduled_postmarket_loop,
+        generate_postmarket_brief,
+    )
+    from backend.market_time import is_nyse_trading_day_et, market_status_dict
+    from backend.earnings import EarningsCache, next_earnings_for_tickers
+except ModuleNotFoundError:
+    # Render may run with cwd at /backend, where absolute `backend.*` is unavailable.
+    from premarket_tv import PremarketTvParams, run_premarket_tv_scan_sync
+    from scraper import (
+        build_theme_leaderboard,
+        extract_us_ticker_from_tv_scan_row,
+        fetch_finviz_industry_filter_map,
+        fetch_finviz_short_float_pct_batch,
+        fetch_yfinance_short_percent_float_pct_batch,
+        fetch_tradingview_tape,
+    )
+    from theme_universe import ThemeUniverseStore, scheduled_refresh_loop
+    from news_brief import (
+        PremarketBriefStore,
+        scheduled_premarket_loop,
+        generate_premarket_brief,
+        PostmarketBriefStore,
+        scheduled_postmarket_loop,
+        generate_postmarket_brief,
+    )
+    from market_time import is_nyse_trading_day_et, market_status_dict
+    from earnings import EarningsCache, next_earnings_for_tickers
 
 import yfinance as yf
-from backend.market_time import is_nyse_trading_day_et, market_status_dict
-from backend.earnings import EarningsCache, next_earnings_for_tickers
 
 # Gate: market trading days only (XNYS).
 def _is_weekday_et() -> bool:
