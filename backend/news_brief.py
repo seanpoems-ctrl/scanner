@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -53,12 +54,19 @@ def _num_str(v: Any) -> str:
     return f"{x:.2f}"
 
 
-async def _fetch_google_news_rss(query: str, *, limit: int = 8) -> list[dict[str, str]]:
+async def _fetch_google_news_rss(
+    query: str,
+    *,
+    limit: int = 8,
+    hl: str = "en-US",
+    gl: str = "US",
+    ceid: str = "US:en",
+) -> list[dict[str, str]]:
     q = (query or "").strip()
     if not q:
         return []
     url = "https://news.google.com/rss/search"
-    params = {"q": q, "hl": "en-US", "gl": "US", "ceid": "US:en"}
+    params = {"q": q, "hl": hl, "gl": gl, "ceid": ceid}
     async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
         r = await client.get(url, params=params, headers={"User-Agent": "Mozilla/5.0"})
         r.raise_for_status()
@@ -82,6 +90,58 @@ async def _fetch_google_news_rss(query: str, *, limit: int = 8) -> list[dict[str
         if len(items) >= limit:
             break
     return items
+
+
+def _headline_key(title: str) -> str:
+    # Normalize headline text to dedupe near-identical stories.
+    cleaned = re.sub(r"[^a-z0-9\s]", " ", str(title or "").lower())
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned
+
+
+def _dedupe_headlines(items: list[dict[str, str]], *, limit: int) -> list[dict[str, str]]:
+    seen: set[str] = set()
+    out: list[dict[str, str]] = []
+    for h in items:
+        title = str(h.get("title") or "").strip()
+        if not title:
+            continue
+        key = _headline_key(title)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(
+            {
+                "title": title,
+                "link": str(h.get("link") or "").strip(),
+                "pubDate": str(h.get("pubDate") or "").strip(),
+            }
+        )
+        if len(out) >= limit:
+            break
+    return out
+
+
+async def _fetch_multi_news(
+    *,
+    queries: list[str],
+    locales: list[tuple[str, str, str]],
+    per_query_limit: int = 6,
+    total_limit: int = 12,
+) -> list[dict[str, str]]:
+    tasks: list[asyncio.Future] = []
+    for q in queries:
+        for hl, gl, ceid in locales:
+            tasks.append(_fetch_google_news_rss(q, limit=per_query_limit, hl=hl, gl=gl, ceid=ceid))
+    if not tasks:
+        return []
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    merged: list[dict[str, str]] = []
+    for r in results:
+        if isinstance(r, Exception):
+            continue
+        merged.extend(r)
+    return _dedupe_headlines(merged, limit=total_limit)
 
 
 async def _tv_snap(symbol: str) -> dict[str, Any]:
@@ -359,7 +419,28 @@ def _build_postmarket_narrative(macro: dict[str, Any], headlines: list[dict[str,
 
 async def generate_postmarket_brief() -> dict[str, Any]:
     macro = await _fetch_macro_snapshot()
-    headlines = await _fetch_google_news_rss("US stock market close Fed earnings after hours", limit=8)
+    us_headlines = await _fetch_multi_news(
+        queries=[
+            "US stock market close Fed earnings after hours",
+            "S&P 500 Nasdaq close market recap",
+            "after hours movers earnings guidance",
+        ],
+        locales=[("en-US", "US", "US:en")],
+        per_query_limit=5,
+        total_limit=8,
+    )
+    global_headlines = await _fetch_multi_news(
+        queries=[
+            "global markets overnight Asia Europe stocks bonds",
+            "ECB BOE BOJ central bank rates inflation",
+            "geopolitics oil commodities currency volatility",
+            "China economy stimulus property yuan",
+        ],
+        locales=[("en-US", "US", "US:en"), ("en-GB", "GB", "GB:en"), ("en-AU", "AU", "AU:en")],
+        per_query_limit=4,
+        total_limit=10,
+    )
+    headlines = _dedupe_headlines([*global_headlines, *us_headlines], limit=14)
 
     narrative = _build_postmarket_narrative(macro, headlines)
     sections: list[dict[str, Any]] = [
@@ -380,8 +461,12 @@ async def generate_postmarket_brief() -> dict[str, Any]:
             ],
         },
         {
-            "title": "Key headlines / catalysts",
-            "bullets": [h["title"] for h in (headlines[:6] if headlines else [])] or ["—"],
+            "title": "Global macro headlines",
+            "bullets": [h["title"] for h in (global_headlines[:6] if global_headlines else [])] or ["—"],
+        },
+        {
+            "title": "US market headlines",
+            "bullets": [h["title"] for h in (us_headlines[:6] if us_headlines else [])] or ["—"],
         },
         {
             "title": "Plan for tomorrow",
@@ -401,6 +486,8 @@ async def generate_postmarket_brief() -> dict[str, Any]:
         "narrative": narrative,
         "sections": sections,
         "headlines": headlines,
+        "headlines_global": global_headlines,
+        "headlines_us": us_headlines,
         "source": {"markets": "tradingview", "news": "google_news_rss"},
     }
     return payload
@@ -410,6 +497,7 @@ async def scheduled_postmarket_loop(store: PostmarketBriefStore) -> None:
     """
     In-process scheduler: generates the brief every weekday at 4:33pm ET.
     """
+    last_run_et_date: str | None = None
     while True:
         try:
             now = _utc_now()
@@ -418,9 +506,17 @@ async def scheduled_postmarket_loop(store: PostmarketBriefStore) -> None:
             await asyncio.sleep(min(sleep_for, 60.0))
             now2 = _utc_now()
             now2_et = now2.astimezone(NY_TZ)
-            if is_nyse_trading_day_et(now2) and (now2_et.hour, now2_et.minute) == (16, 33):
+            # Robust trigger: if server was asleep, still run once after the target time.
+            target_et = datetime.combine(now2_et.date(), datetime.min.time(), tzinfo=NY_TZ).replace(hour=16, minute=33, second=0, microsecond=0)
+            today_key = now2_et.date().isoformat()
+            if (
+                is_nyse_trading_day_et(now2)
+                and now2_et >= target_et
+                and last_run_et_date != today_key
+            ):
                 payload = await generate_postmarket_brief()
                 await store.save(payload)
+                last_run_et_date = today_key
                 await asyncio.sleep(65.0)
         except Exception:
             await asyncio.sleep(10.0)
@@ -433,7 +529,28 @@ async def generate_premarket_brief() -> dict[str, Any]:
     vix = macro.get("vix", {})
     us10y = macro.get("us10y", {})
 
-    headlines = await _fetch_google_news_rss("US premarket futures Fed CPI earnings", limit=8)
+    us_headlines = await _fetch_multi_news(
+        queries=[
+            "US premarket futures Fed CPI earnings",
+            "US economic calendar jobs CPI PCE ISM",
+            "premarket movers earnings guidance",
+        ],
+        locales=[("en-US", "US", "US:en")],
+        per_query_limit=5,
+        total_limit=8,
+    )
+    global_headlines = await _fetch_multi_news(
+        queries=[
+            "global markets overnight Asia Europe stocks bonds",
+            "ECB BOE BOJ central bank inflation rates",
+            "geopolitics oil commodities shipping sanctions",
+            "China economy stimulus yuan property",
+        ],
+        locales=[("en-US", "US", "US:en"), ("en-GB", "GB", "GB:en"), ("en-AU", "AU", "AU:en")],
+        per_query_limit=4,
+        total_limit=10,
+    )
+    headlines = _dedupe_headlines([*global_headlines, *us_headlines], limit=14)
 
     narrative = _build_narrative(macro, headlines)
     mood = _market_mood(nq, es)
@@ -457,9 +574,13 @@ async def generate_premarket_brief() -> dict[str, Any]:
             ],
         },
         {
-            "title": "Economic data / catalysts",
+            "title": "Global macro headlines",
+            "bullets": [h["title"] for h in (global_headlines[:6] if global_headlines else [])] or ["—"],
+        },
+        {
+            "title": "US market headlines / catalysts",
             "bullets": [
-                "Mention top catalysts and impact derived from headlines + rate/vol context; confirm calendar for exact release times.",
+                *([h["title"] for h in us_headlines[:6]] if us_headlines else []),
                 "Scan: Fed speakers, CPI/PCE, jobs data, large-cap earnings, and energy/FX shocks.",
             ],
         },
@@ -488,6 +609,8 @@ async def generate_premarket_brief() -> dict[str, Any]:
         "narrative": narrative,
         "sections": sections,
         "headlines": headlines,
+        "headlines_global": global_headlines,
+        "headlines_us": us_headlines,
         "source": {"markets": "tradingview", "news": "google_news_rss"},
     }
     return payload
@@ -497,6 +620,7 @@ async def scheduled_premarket_loop(store: PremarketBriefStore) -> None:
     """
     In-process scheduler: generates the brief every weekday at 8:03am ET.
     """
+    last_run_et_date: str | None = None
     while True:
         try:
             now = _utc_now()
@@ -506,10 +630,18 @@ async def scheduled_premarket_loop(store: PremarketBriefStore) -> None:
             # Re-check each minute; run once we're past target time.
             now2 = _utc_now()
             now2_et = now2.astimezone(NY_TZ)
-            if is_nyse_trading_day_et(now2) and (now2_et.hour, now2_et.minute) == (8, 3):
+            # Robust trigger: if server was asleep, still run once after the target time.
+            target_et = datetime.combine(now2_et.date(), datetime.min.time(), tzinfo=NY_TZ).replace(hour=8, minute=3, second=0, microsecond=0)
+            today_key = now2_et.date().isoformat()
+            if (
+                is_nyse_trading_day_et(now2)
+                and now2_et >= target_et
+                and last_run_et_date != today_key
+            ):
                 payload = await generate_premarket_brief()
                 await store.save(payload)
                 # Prevent double-run within the same minute.
+                last_run_et_date = today_key
                 await asyncio.sleep(65.0)
         except Exception:
             await asyncio.sleep(10.0)

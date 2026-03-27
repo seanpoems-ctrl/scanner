@@ -46,7 +46,9 @@ def market_status(now_utc: datetime | None = None) -> MarketStatus:
     d = now_et.date()
     is_td = XNYS.is_session(str(d))
 
-    pre_start = datetime.combine(d, time(8, 3), tzinfo=NY_TZ)
+    # Pre-market scanner window start (ET). ZoneInfo("America/New_York") automatically
+    # shifts between EST/EDT with DST.
+    pre_start = datetime.combine(d, time(8, 13), tzinfo=NY_TZ)
     open_time = datetime.combine(d, time(9, 30), tzinfo=NY_TZ)
     close_time = datetime.combine(d, time(16, 0), tzinfo=NY_TZ)
 
