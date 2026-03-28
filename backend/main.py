@@ -495,8 +495,42 @@ async def get_premarket_gappers_endpoint(
     for r, sym in zip(rows, symbols_in_order):
         if sym and short_by_sym.get(sym) is not None:
             r["short_interest_pct"] = short_by_sym[sym]
+
+    # --- TEMP: mock rows for badge styling verification ---
+    # Remove this block once badge colours (#B3FF00 U&R, #2EE59D EP) are confirmed.
+    _MOCK_ROWS = [
+        {
+            "ticker": "FAKE_EP",
+            "premarket_gap": 12.0,
+            "premarket_volume": 3_000_000,
+            "change": 11.5,
+            "Volatility.D": 8.2,
+            "market_cap_basic": 4_500_000_000,
+            "sector": "Technology",
+            "industry": "Semiconductors",
+            "setup_tag": "EP",
+            "volume_buzz_pct": 300.0,
+        },
+        {
+            "ticker": "FAKE_UR",
+            "premarket_gap": 2.5,
+            "premarket_volume": 850_000,
+            "change": 2.1,
+            "Volatility.D": 5.4,
+            "market_cap_basic": 2_100_000_000,
+            "sector": "Healthcare",
+            "industry": "Biotechnology",
+            "setup_tag": "U&R",
+            "volume_buzz_pct": 45.0,
+        },
+    ]
+    rows = _MOCK_ROWS + rows
+    # --- END TEMP ---
+
     payload = {
         **data,
+        "rows": rows,
+        "row_count": len(rows),
         "fetched_at_utc": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
         "short_interest_source": short_source,
     }
