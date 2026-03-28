@@ -163,57 +163,6 @@ _PREMARKET_GAP_CACHE: dict[str, tuple[float, dict]] = {}
 _PREMARKET_GAP_TTL_SEC = 50.0
 
 
-def _mock_gap_rows_for_badge_preview() -> list[dict]:
-    """
-    TEMP: synthetic rows to verify Setup badge colours (#2EE59D EP, #B3FF00 U&R) in the UI.
-    Premarket gaps are set very high so default "sort by gap desc" surfaces them at the top.
-    """
-    return [
-        {
-            "ticker": "FAKE_EP",
-            "premarket_gap": 99.9,
-            "premarket_volume": 3_000_000,
-            "change": 11.5,
-            "Volatility.D": 8.2,
-            "market_cap_basic": 4_500_000_000,
-            "sector": "Technology",
-            "industry": "Semiconductors (MOCK)",
-            "setup_tag": "EP",
-            "volume_buzz_pct": 300.0,
-        },
-        {
-            "ticker": "FAKE_UR",
-            "premarket_gap": 99.8,
-            "premarket_volume": 850_000,
-            "change": 2.1,
-            "Volatility.D": 5.4,
-            "market_cap_basic": 2_100_000_000,
-            "sector": "Healthcare",
-            "industry": "Biotechnology (MOCK)",
-            "setup_tag": "U&R",
-            "volume_buzz_pct": 45.0,
-        },
-    ]
-
-
-def _inject_mock_gap_rows_into_payload(payload: dict) -> dict:
-    """TEMP: prepend badge-preview mocks; strip prior FAKE_* rows to avoid duplicates after cache hits."""
-    mocks = _mock_gap_rows_for_badge_preview()
-    fake_syms = {str(m.get("ticker") or "").upper() for m in mocks}
-    rows_in = list(payload.get("rows") or [])
-
-    def _row_sym(r: dict) -> str:
-        raw = r.get("ticker") or r.get("symbol") or ""
-        s = str(raw).strip()
-        if ":" in s:
-            s = s.rsplit(":", 1)[-1]
-        return s.upper()
-
-    rows_f = [r for r in rows_in if _row_sym(r) not in fake_syms]
-    rows_out = mocks + rows_f
-    out = {**payload, "rows": rows_out, "row_count": len(rows_out)}
-    return out
-
 # Cache ticker intel to avoid Yahoo throttling.
 _TICKER_INTEL_CACHE: dict[str, tuple[float, dict]] = {}
 _TICKER_INTEL_TTL_SEC = 6 * 60.0
@@ -507,21 +456,9 @@ async def get_premarket_gappers_endpoint(
     min_mkt_cap_b: float = FQuery(0, ge=0, description="Min market cap, billions USD"),
     min_avg_dollar_vol_m: float = FQuery(0, ge=0, description="Min est avg $ volume (10d avg vol × price), millions USD"),
     limit: int = FQuery(100, ge=10, le=500),
-    badge_preview: bool = FQuery(False, description="TEMP: if true, return only mock EP/U&R rows (no TradingView/Yahoo)"),
 ) -> dict:
     """Pre-market gappers via tradingview-screener (TV scanneramerica); cached ~50s per filter set."""
     global _PREMARKET_GAP_CACHE
-    if badge_preview:
-        mocks = _mock_gap_rows_for_badge_preview()
-        return {
-            "source": "badge_preview",
-            "market": None,
-            "rows": mocks,
-            "row_count": len(mocks),
-            "fetched_at_utc": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
-            "short_interest_source": None,
-            "note": "TEMP badge_preview=1 — remove when UI colours are verified",
-        }
     now = monotonic()
     params = PremarketTvParams(
         min_gap_pct=min_gap_pct,
@@ -537,7 +474,7 @@ async def get_premarket_gappers_endpoint(
     ).hexdigest()
     hit = _PREMARKET_GAP_CACHE.get(cache_key)
     if hit is not None and (now - hit[0]) < _PREMARKET_GAP_TTL_SEC:
-        return _inject_mock_gap_rows_into_payload(dict(hit[1]))
+        return hit[1]
     try:
         data = await asyncio.to_thread(run_premarket_tv_scan_sync, params)
     except Exception as e:
@@ -572,7 +509,6 @@ async def get_premarket_gappers_endpoint(
         "fetched_at_utc": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
         "short_interest_source": short_source,
     }
-    payload = _inject_mock_gap_rows_into_payload(payload)
     _PREMARKET_GAP_CACHE[cache_key] = (now, payload)
     return payload
 
