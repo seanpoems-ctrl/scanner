@@ -128,8 +128,11 @@ class ThemeStock:
     today_return_pct: float
     month_return_pct: float
     ep_candidate: bool
+    # Pre-computed U&R ingredient: True if the stock's Low undercut the 20EMA by ≥1%
+    # within the last 3 trading sessions (populated in _build_stock_snapshot).
+    recent_low_undercut_20ema: bool = False
     # Pattern flags (set after construction via _finalize_patterns)
-    ur_candidate: bool = False       # Undercut & Reclaim: prev close < key level, current close above
+    ur_candidate: bool = False       # Undercut & Reclaim: institutional-grade reclaim of 20EMA
     pullback_candidate: bool = False  # Pullback buy: uptrend touching 10EMA or 20EMA
 
     @property
@@ -1383,25 +1386,39 @@ def _finalize_patterns(stocks: list[ThemeStock]) -> None:
     """
     Tag U&R and Pullback patterns after snapshot construction.
 
-    U&R (Undercut & Reclaim): price previously dipped below the 20EMA (prev_close < ema20)
-    and has now reclaimed it on today's close (close >= ema20), with volume confirmation.
+    U&R (Undercut & Reclaim) — institutional standard:
+      1. Undercut: the stock's intraday Low was ≥1% below the 20EMA on at least one of the
+         last 3 completed trading sessions (pre-computed as `recent_low_undercut_20ema`).
+      2. Reclaim: today's Close is above the 20EMA.
+      3. Trend guardrail: Close > 200EMA — only reclaims in an overall uptrend, not falling knives.
+      4. Volume conviction: volume_buzz > 10% — the reclaim must have participation.
+      5. Not already tagged as an EP candidate.
 
-    Pullback Buy: stock is in an uptrend (close > ema50 > ema200) and is pulling back to touch
-    the 10EMA or 20EMA (close within 2% of either), with volume below 3M average (orderly pullback).
+    Pullback Buy:
+      - Stage-2 uptrend (close > ema50 > ema200, ema10 > ema50).
+      - Close within 2% of the 10EMA or 20EMA (testing from above).
+      - Orderly volume (buzz < 10%) — not a climactic sell-off.
+      - Not already tagged as EP or U&R.
     """
     for s in stocks:
-        # U&R: prev close undercut 20EMA, today reclaimed above it with relative volume surge.
-        ur_undercut = s.prev_close < s.ema20
-        ur_reclaim = s.close >= s.ema20
-        ur_vol_ok = s.volume_buzz_pct > 10  # at least modest volume confirmation
-        s.ur_candidate = bool(ur_undercut and ur_reclaim and ur_vol_ok and not s.ep_candidate)
+        # --- U&R ---
+        ur_undercut = s.recent_low_undercut_20ema          # Low ≥1% below 20EMA in last 3 sessions
+        ur_reclaim = s.close > s.ema20                     # today's close back above 20EMA
+        ur_trend_ok = s.close > s.ema200                   # overall uptrend guardrail
+        ur_vol_ok = s.volume_buzz_pct > 10                 # conviction volume on reclaim
+        s.ur_candidate = bool(
+            ur_undercut
+            and ur_reclaim
+            and ur_trend_ok
+            and ur_vol_ok
+            and not s.ep_candidate
+        )
 
-        # Pullback Buy: in Stage 2 uptrend, close testing 10EMA or 20EMA from above,
-        # volume should be subdued (< 10% above 3M average) — orderly consolidation.
+        # --- Pullback Buy ---
         in_uptrend = s.close > s.ema50 > s.ema200 and s.ema10 > s.ema50
         near_10ema = abs(s.close - s.ema10) / s.ema10 < 0.02 if s.ema10 > 0 else False
         near_20ema = abs(s.close - s.ema20) / s.ema20 < 0.02 if s.ema20 > 0 else False
-        pullback_vol_ok = s.volume_buzz_pct < 10  # orderly, not climactic
+        pullback_vol_ok = s.volume_buzz_pct < 10           # orderly, not climactic
         s.pullback_candidate = bool(
             in_uptrend
             and (near_10ema or near_20ema)
@@ -1451,6 +1468,18 @@ def _build_stock_snapshot(ticker: str) -> ThemeStock | None:
         closes=close_series.tail(20).tolist(),
     )
 
+    # U&R ingredient: did the stock's intraday Low drop ≥1% below the 20EMA
+    # on any of the last 3 completed trading sessions (excluding today)?
+    # We look at sessions [-4:-1] to get up to 3 prior days.
+    ema20_series = close_series.ewm(span=20, adjust=False).mean()
+    recent_low_undercut_20ema = False
+    lookback_lows = low_series.iloc[-4:-1] if len(low_series) >= 4 else low_series.iloc[:-1]
+    lookback_emas = ema20_series.iloc[-4:-1] if len(ema20_series) >= 4 else ema20_series.iloc[:-1]
+    for low_val, ema_val in zip(lookback_lows, lookback_emas):
+        if ema_val > 0 and float(low_val) < float(ema_val) * 0.99:
+            recent_low_undercut_20ema = True
+            break
+
     fast_info = stock.fast_info if hasattr(stock, "fast_info") else {}
     info = stock.info if hasattr(stock, "info") else {}
     name = str(
@@ -1493,6 +1522,7 @@ def _build_stock_snapshot(ticker: str) -> ThemeStock | None:
         today_return_pct=today_return_pct,
         month_return_pct=month_return_pct,
         ep_candidate=False,
+        recent_low_undercut_20ema=recent_low_undercut_20ema,
     )
     ema_stack_ok = snapshot.close > snapshot.ema10 > snapshot.ema20 > snapshot.ema50 > snapshot.ema200
     ema_10_20_ok = snapshot.close > snapshot.ema10 > snapshot.ema20
