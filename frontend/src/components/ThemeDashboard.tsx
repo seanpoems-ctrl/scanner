@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, Info, LayoutGrid, Moon, Plus, Search, Sunrise } from "lucide-react";
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
@@ -28,6 +28,9 @@ type ApiStock = {
   today_return_pct?: number;
   month_return_pct?: number;
   ep_candidate?: boolean;
+  ur_candidate?: boolean;
+  pullback_candidate?: boolean;
+  setup_tag?: string;
 };
 
 type ApiTheme = {
@@ -439,16 +442,16 @@ function LiquidityFlowCard({ summary }: { summary: ApiPayload["marketFlowSummary
   );
 }
 
-function RsSnapshot({ rows }: { rows: { theme: string; rs: number }[] }) {
+const RsSnapshot = memo(function RsSnapshot({ rows }: { rows: { theme: string; rs: number }[] }) {
   return (
     <div className="rounded-xl border border-terminal-border bg-terminal-card shadow-sm">
       <header className="border-b border-terminal-border px-4 py-3">
         <h3 className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">RS Snapshot</h3>
         <p className="mt-0.5 text-[10px] text-slate-600">Top themes by 1M RS</p>
       </header>
-      <div className="h-[240px] px-2 py-2">
+      <div className="h-[240px] w-full px-2 py-2">
         {rows.length ? (
-          <ResponsiveContainer width="100%" height="100%">
+          <ResponsiveContainer width="100%" height={240}>
             <BarChart data={rows} layout="vertical" margin={{ top: 6, right: 12, bottom: 6, left: 6 }}>
               <XAxis type="number" domain={["dataMin", "dataMax"]} hide />
               <YAxis type="category" dataKey="theme" width={120} tick={{ fill: "#94a3b8", fontSize: 10 }} />
@@ -466,6 +469,24 @@ function RsSnapshot({ rows }: { rows: { theme: string; rs: number }[] }) {
         )}
       </div>
     </div>
+  );
+});
+
+function SetupBadge({ tag }: { tag: string | null | undefined }) {
+  if (!tag) return <span className="text-slate-600">—</span>;
+  const cls =
+    tag === "EP"
+      ? "border-[#2EE59D]/50 bg-[#2EE59D]/15 text-[#2EE59D]"
+      : tag === "U&R"
+        ? "border-[#B3FF00]/45 bg-[#B3FF00]/12 text-[#B3FF00]"
+        : "border-sky-500/45 bg-sky-500/12 text-sky-300";
+  return (
+    <span
+      className={`inline-flex items-center rounded-md border px-1.5 py-0.5 font-mono text-[9px] font-bold leading-none ${cls}`}
+      title={tag === "EP" ? "Episodic Pivot: gap>5%, volume>3× avg, near 52w high" : tag === "U&R" ? "Undercut & Reclaim: price broke below key EMA and reclaimed above it" : "Pullback Buy: Stage-2 uptrend touching 10EMA or 20EMA on orderly volume"}
+    >
+      {tag}
+    </span>
   );
 }
 
@@ -1184,7 +1205,7 @@ function useUniverseSpotlight(label: string | null) {
   return { data, loading };
 }
 
-function ScannerView({
+const ScannerView = memo(function ScannerView({
   payload,
   spotlightThemeName,
   setSpotlightThemeName,
@@ -1403,7 +1424,7 @@ function ScannerView({
         </div>
       </div>
 
-      {/* Right: Leaderboard */}
+      {/* Right: Leaderboard — sticky thead via border-separate + sticky top-0 on th */}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <section className="flex min-h-0 flex-1 flex-col rounded-xl border border-terminal-border bg-terminal-card shadow-sm">
           <header className="flex flex-wrap items-center justify-between gap-3 border-b border-terminal-border px-4 py-3">
@@ -1550,7 +1571,7 @@ function ScannerView({
       </div>
     </div>
   );
-}
+});
 
 function MarketBriefCard({
   mode,
@@ -1603,7 +1624,7 @@ function MarketBriefCard({
         </header>
         <div className="fintech-scroll min-h-0 flex-1 overflow-y-auto p-3">
           {loading ? (
-            <p className="text-xs text-slate-500">Loading pre-market brief…</p>
+            <p className="text-xs text-slate-500">Generating brief in background…</p>
           ) : brief?.narrative?.length || brief?.sections?.length ? (
             <article className="space-y-2 text-[12px] leading-snug text-slate-300">
               <header className="flex items-center justify-between gap-3 rounded-lg border border-terminal-border bg-terminal-bg/50 px-2.5 py-2">
@@ -1636,23 +1657,24 @@ function MarketBriefCard({
               ))}
             </article>
           ) : (
-            <div className="space-y-2">
-              <p className="text-xs text-slate-500">No {mode === "pre" ? "pre" : "post"}-market brief yet.</p>
-              <button
-                type="button"
-                className="rounded-md border border-terminal-border bg-terminal-bg px-3 py-2 text-xs font-semibold text-slate-300 hover:border-accent/40 hover:text-white"
-                onClick={onGenerate}
-              >
-                Generate now
-              </button>
-            </div>
+            <p className="text-xs text-slate-500">No {mode === "pre" ? "pre" : "post"}-market brief yet.</p>
           )}
+        </div>
+        <div className="shrink-0 border-t border-terminal-border px-3 py-2">
+          <button
+            type="button"
+            disabled={loading}
+            className="w-full rounded-md border border-terminal-border bg-terminal-bg px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400 transition-colors hover:border-accent/40 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+            onClick={onGenerate}
+          >
+            {loading ? "Generating…" : "Generate now"}
+          </button>
         </div>
     </section>
   );
 }
 
-function GappersView({
+const GappersView = memo(function GappersView({
   gappers,
   loading,
   error,
@@ -1677,7 +1699,7 @@ function GappersView({
   onSelectTicker: (ticker: string, meta?: TickerDrawerMeta) => void;
 }) {
   const [sortKey, setSortKey] = useState<
-    "ticker" | "premktPct" | "premktVol" | "dailyPct" | "adr" | "mcap" | "sector" | "industry" | "grade"
+    "ticker" | "premktPct" | "premktVol" | "dailyPct" | "adr" | "mcap" | "sector" | "industry" | "grade" | "setup"
   >("premktPct");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
 
@@ -1685,6 +1707,7 @@ function GappersView({
     const rows = [...(gappers?.rows ?? [])];
 
     const gradeScore = (g: string) => (g === "A" ? 3 : g === "B" ? 2 : 1);
+    const setupScore = (s: string) => (s === "EP" ? 3 : s === "U&R" ? 2 : s === "Pullback" ? 1 : 0);
 
     rows.sort((a, b) => {
       const symA = gapScanRowSymbol(a);
@@ -1708,6 +1731,8 @@ function GappersView({
       const industryB = b.industry != null && String(b.industry).trim() ? String(b.industry) : "";
       const gradeA = symUsA ? (gapScannerGradeByTicker.get(symUsA) ?? "C") : "C";
       const gradeB = symUsB ? (gapScannerGradeByTicker.get(symUsB) ?? "C") : "C";
+      const setupA = gapRowStr(a, "setup_tag") ?? "";
+      const setupB = gapRowStr(b, "setup_tag") ?? "";
 
       const dir = sortDir === "asc" ? 1 : -1;
 
@@ -1729,9 +1754,9 @@ function GappersView({
       else if (sortKey === "sector") c = strCmp(sectorA, sectorB);
       else if (sortKey === "industry") c = strCmp(industryA, industryB);
       else if (sortKey === "grade") c = (gradeScore(gradeA) - gradeScore(gradeB)) * dir;
+      else if (sortKey === "setup") c = (setupScore(setupA) - setupScore(setupB)) * dir;
 
       if (c !== 0) return c;
-      // Stable-ish tiebreakers: premkt gap desc, then ticker
       const tie1 = (pmGapA ?? -Infinity) - (pmGapB ?? -Infinity);
       if (tie1 !== 0) return tie1 * -1;
       return symUsA.localeCompare(symUsB);
@@ -1828,6 +1853,7 @@ function GappersView({
                       { label: "Daily %", key: "dailyPct" },
                       { label: "ADR%", key: "adr" },
                       { label: "MktCap", key: "mcap" },
+                      { label: "Setup", key: "setup" },
                       { label: "Sector", key: "sector" },
                       { label: "Industry", key: "industry" },
                       { label: "Grade", key: "grade" },
@@ -1873,6 +1899,7 @@ function GappersView({
                   const sector = row.sector != null && String(row.sector).trim() ? String(row.sector) : "—";
                   const industry = row.industry != null && String(row.industry).trim() ? String(row.industry) : "—";
                   const grade = symUs ? (gapScannerGradeByTicker.get(symUs.toUpperCase()) ?? "C") : "C";
+                  const setupTag = gapRowStr(row, "setup_tag") ?? "";
                   return (
                     <tr
                       key={`${symUs || "row"}-${idx}`}
@@ -1965,6 +1992,9 @@ function GappersView({
                           {mcapLines.tier ? <span className="text-[9px] font-medium text-slate-500">{mcapLines.tier}</span> : null}
                         </div>
                       </td>
+                      <td className="border-b border-terminal-border/60 px-2 py-2 text-center align-middle">
+                        <SetupBadge tag={setupTag || null} />
+                      </td>
                       <td className="border-b border-terminal-border/60 px-2 py-2 text-slate-300">{sector}</td>
                       <td className="max-w-[10rem] border-b border-terminal-border/60 px-2 py-2 text-slate-400">
                         <span className="line-clamp-2 leading-snug">{industry}</span>
@@ -1984,7 +2014,7 @@ function GappersView({
       </section>
     </div>
   );
-}
+});
 
 export function ThemeDashboard() {
   const [tab, setTab] = useState<"scanner" | "gappers">("scanner");

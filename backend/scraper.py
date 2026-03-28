@@ -128,6 +128,9 @@ class ThemeStock:
     today_return_pct: float
     month_return_pct: float
     ep_candidate: bool
+    # Pattern flags (set after construction via _finalize_patterns)
+    ur_candidate: bool = False       # Undercut & Reclaim: prev close < key level, current close above
+    pullback_candidate: bool = False  # Pullback buy: uptrend touching 10EMA or 20EMA
 
     @property
     def qualifies_a_plus(self) -> bool:
@@ -159,6 +162,17 @@ class ThemeStock:
         if self.qualifies_grade_a:
             return "A"
         return "-"
+
+    @property
+    def setup_tag(self) -> str:
+        """Primary pattern tag for the Setup column."""
+        if self.ep_candidate:
+            return "EP"
+        if self.ur_candidate:
+            return "U&R"
+        if self.pullback_candidate:
+            return "Pullback"
+        return ""
 
 
 @dataclass(slots=True)
@@ -1365,6 +1379,38 @@ def _finalize_ep_candidates(stocks: list[ThemeStock]) -> None:
         s.ep_candidate = bool(gap_ok and or_ok and rs_ok)
 
 
+def _finalize_patterns(stocks: list[ThemeStock]) -> None:
+    """
+    Tag U&R and Pullback patterns after snapshot construction.
+
+    U&R (Undercut & Reclaim): price previously dipped below the 20EMA (prev_close < ema20)
+    and has now reclaimed it on today's close (close >= ema20), with volume confirmation.
+
+    Pullback Buy: stock is in an uptrend (close > ema50 > ema200) and is pulling back to touch
+    the 10EMA or 20EMA (close within 2% of either), with volume below 3M average (orderly pullback).
+    """
+    for s in stocks:
+        # U&R: prev close undercut 20EMA, today reclaimed above it with relative volume surge.
+        ur_undercut = s.prev_close < s.ema20
+        ur_reclaim = s.close >= s.ema20
+        ur_vol_ok = s.volume_buzz_pct > 10  # at least modest volume confirmation
+        s.ur_candidate = bool(ur_undercut and ur_reclaim and ur_vol_ok and not s.ep_candidate)
+
+        # Pullback Buy: in Stage 2 uptrend, close testing 10EMA or 20EMA from above,
+        # volume should be subdued (< 10% above 3M average) — orderly consolidation.
+        in_uptrend = s.close > s.ema50 > s.ema200 and s.ema10 > s.ema50
+        near_10ema = abs(s.close - s.ema10) / s.ema10 < 0.02 if s.ema10 > 0 else False
+        near_20ema = abs(s.close - s.ema20) / s.ema20 < 0.02 if s.ema20 > 0 else False
+        pullback_vol_ok = s.volume_buzz_pct < 10  # orderly, not climactic
+        s.pullback_candidate = bool(
+            in_uptrend
+            and (near_10ema or near_20ema)
+            and pullback_vol_ok
+            and not s.ep_candidate
+            and not s.ur_candidate
+        )
+
+
 def _build_stock_snapshot(ticker: str) -> ThemeStock | None:
     logger.info("Auditing %s...", ticker)
     stock = yf.Ticker(ticker)
@@ -1725,6 +1771,7 @@ async def _build_leaderboard_screener_audit(
     stocks = [s for s in snapshots if s is not None]
     logger.info("Completed ticker audits. Valid snapshots: %d", len(stocks))
     _finalize_ep_candidates(stocks)
+    _finalize_patterns(stocks)
     ep_tickers = [s.ticker for s in stocks if s.ep_candidate]
     if ep_tickers:
         logger.info("EP candidates (gap + OR-RVOL + RS decile): %s", ", ".join(ep_tickers))
@@ -1813,6 +1860,9 @@ async def _build_leaderboard_screener_audit(
                         "today_return_pct": round(m.today_return_pct, 2),
                         "month_return_pct": round(m.month_return_pct, 2),
                         "ep_candidate": m.ep_candidate,
+                        "ur_candidate": m.ur_candidate,
+                        "pullback_candidate": m.pullback_candidate,
+                        "setup_tag": m.setup_tag,
                     }
                     for m in ranked_members[:8]
                 ],
@@ -1883,6 +1933,9 @@ async def _build_leaderboard_screener_audit(
                             "today_return_pct": round(s.today_return_pct, 2),
                             "month_return_pct": round(s.month_return_pct, 2),
                             "ep_candidate": s.ep_candidate,
+                            "ur_candidate": s.ur_candidate,
+                            "pullback_candidate": s.pullback_candidate,
+                            "setup_tag": s.setup_tag,
                         }
                         for s in chunk
                     ],

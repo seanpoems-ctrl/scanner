@@ -326,6 +326,36 @@ def _trend_word(v: Any) -> str:
     return "flat"
 
 
+def _regime_label(vix_close: Any, nq_chg: Any, es_chg: Any) -> tuple[str, str]:
+    """
+    Returns (regime_label, focus_directive) synthesizing VIX + futures.
+    regime_label: 'Risk-On', 'Selective', 'Defensive', 'Extreme Caution'
+    focus_directive: actionable one-liner for traders.
+    """
+    try:
+        vix_v = float(vix_close) if vix_close is not None else 20.0
+    except Exception:
+        vix_v = 20.0
+    try:
+        avg_fut = ((float(nq_chg) if nq_chg is not None else 0.0) + (float(es_chg) if es_chg is not None else 0.0)) / 2.0
+    except Exception:
+        avg_fut = 0.0
+
+    if vix_v >= 30:
+        return "Extreme Caution", "VIX ≥30 — stay flat or hedge; only trade the highest-conviction A+ setups."
+    if vix_v >= 22:
+        if avg_fut < -0.3:
+            return "Defensive", "Elevated VIX + futures weak — reduce size, wait for breadth confirmation."
+        return "Selective", "Elevated VIX — focus on liquid A+ Stage-2 leaders with tight risk parameters."
+    if avg_fut > 0.5 and vix_v < 18:
+        return "Risk-On", "Low VIX + strong futures — A+ EP setups favored; press confirmed breakouts."
+    if avg_fut > 0.15:
+        return "Selective", "Constructive tone — prioritize A+ names with clean EMA stacks and high ADDV."
+    if avg_fut < -0.5:
+        return "Defensive", "Futures weak — reduce size and require tighter confirmation before entries."
+    return "Selective", "Mixed tone — trade what you see; only press if early breadth and volume confirm."
+
+
 def _build_narrative(macro: dict[str, Any], headlines: list[dict[str, str]]) -> list[str]:
     nq = macro.get("nasdaq_fut", {})
     es = macro.get("spx_fut", {})
@@ -337,72 +367,56 @@ def _build_narrative(macro: dict[str, Any], headlines: list[dict[str, str]]) -> 
     nikkei = macro.get("nikkei", {})
     hsi = macro.get("hang_seng", {})
     kospi = macro.get("kospi", {})
-    # NOTE: breadth/credit widgets are shown in the sidebar; we do not embed their data in the news brief.
 
+    nq_chg = nq.get("change_pct")
+    es_chg = es.get("change_pct")
+    vix_close = vix.get("close")
+
+    regime, focus = _regime_label(vix_close, nq_chg, es_chg)
     mood_line = _market_mood(nq, es)
+
     try:
-        nq_chg = float(nq.get("change_pct")) if nq.get("change_pct") is not None else None
+        pair_chg = ((float(nq_chg) if nq_chg is not None else 0.0) + (float(es_chg) if es_chg is not None else 0.0)) / 2.0
     except Exception:
-        nq_chg = None
-    try:
-        es_chg = float(es.get("change_pct")) if es.get("change_pct") is not None else None
-    except Exception:
-        es_chg = None
-    pair_chg = None
-    if nq_chg is not None and es_chg is not None:
-        pair_chg = nq_chg + es_chg
-    elif nq_chg is not None:
-        pair_chg = nq_chg
-    elif es_chg is not None:
-        pair_chg = es_chg
+        pair_chg = None
+
+    regime_line = (
+        f"Market Regime: {regime}. {focus}"
+    )
 
     us_tone = (
-        "US futures set the tone into the open. "
-        f"Nasdaq and S&P futures are {_trend_word(pair_chg)} overall. "
+        f"US futures: Nasdaq and S&P are {_trend_word(pair_chg)} overall. "
         f"{mood_line}"
     )
     vol_rates = (
-        "Volatility and rates are the risk gates. "
-        f"VIX conditions look {_trend_word(vix.get('change_pct'))}, while yields are {_trend_word(us10y.get('change_pct'))}. "
-        "Whether volatility is rising or simply elevated, tighten risk and demand cleaner confirmations."
+        f"Risk gates — VIX {_num_str(vix_close)} ({_pct_str(vix.get('change_pct'))}), "
+        f"US10Y {_num_str(us10y.get('close'))} ({_pct_str(us10y.get('change_pct'))}). "
+        "Rising volatility or yields demand tighter sizing and cleaner entry confirmation."
     )
 
     eu_line = (
-        "Europe is "
-        f"{_trend_word((dax.get('change_pct') or 0) + (ftse.get('change_pct') or 0) + (stoxx50.get('change_pct') or 0))}, "
-        "with major indices moving together."
+        f"Europe {_trend_word((dax.get('change_pct') or 0) + (ftse.get('change_pct') or 0) + (stoxx50.get('change_pct') or 0))} "
+        f"(DAX {_pct_str(dax.get('change_pct'))} · FTSE {_pct_str(ftse.get('change_pct'))} · STOXX50 {_pct_str(stoxx50.get('change_pct'))})."
     )
     as_line = (
-        "Asia is "
-        f"{_trend_word((hsi.get('change_pct') or 0) + (nikkei.get('change_pct') or 0) + (kospi.get('change_pct') or 0))}, "
-        "adding a second read on risk appetite."
+        f"Asia {_trend_word((hsi.get('change_pct') or 0) + (nikkei.get('change_pct') or 0) + (kospi.get('change_pct') or 0))} "
+        f"(Nikkei {_pct_str(nikkei.get('change_pct'))} · HSI {_pct_str(hsi.get('change_pct'))} · KOSPI {_pct_str(kospi.get('change_pct'))})."
     )
     sync = _sync_note(macro, macro)
-    global_sync = (
-        f"Overnight action suggests a global macro impulse rather than isolated sector noise. "
-        f"{eu_line} {as_line} {sync}"
-    )
-
-    risk_checks = (
-        "Risk checks: confirm the first move with early breadth and liquidity, and stay alert to abrupt shifts in rates/vol."
-    )
-
-    catalysts = (
-        "Catalyst risk stays elevated. Watch Fed speakers and the economic calendar (CPI/PCE, jobs, ISM), plus any energy/FX shocks "
-        "(confirm calendar for exact release times)."
-    )
+    global_sync = f"{eu_line} {as_line} {sync}"
 
     actionable = (
-        "Technical Levels, Leading Themes & Lessons: treat the open like a confirmation test. Keep sizing tight, "
-        "prioritize liquid A+ Stage-2 leaders and the current leaders on your theme leaderboard, and only press if "
-        "price action improves *and* participation stabilizes. If VIX stays elevated, stay defensive and wait for cleaner structure."
+        "Execution: treat the open as a confirmation test. "
+        "Prioritize liquid A+ Stage-2 leaders (price > 10EMA > 20EMA > 50EMA > 200EMA, ADDV > $100M, ADR > 4.5%). "
+        "EP setups take priority on confirmed volume surge; U&R and Pullback setups require the EMA level to hold as support. "
+        "If VIX is elevated, stay defensive and wait for structure."
     )
 
     return [
+        regime_line,
         us_tone,
         vol_rates,
         global_sync,
-        f"{catalysts} {risk_checks}",
         actionable,
     ]
 
@@ -471,11 +485,16 @@ def next_postmarket_release_et(now_utc: datetime | None = None) -> datetime:
 
 
 def _build_postmarket_narrative(macro: dict[str, Any], headlines: list[dict[str, str]]) -> list[str]:
-    # This is a close-to-close summary template using the same macro snapshot symbols.
     nq = macro.get("nasdaq_fut", {})
     es = macro.get("spx_fut", {})
     vix = macro.get("vix", {})
     us10y = macro.get("us10y", {})
+
+    vix_close = vix.get("close")
+    nq_chg = nq.get("change_pct")
+    es_chg = es.get("change_pct")
+
+    regime, focus = _regime_label(vix_close, nq_chg, es_chg)
     key_moves = ", ".join(
         [
             _fmt_move("NQ", nq),
@@ -485,9 +504,10 @@ def _build_postmarket_narrative(macro: dict[str, Any], headlines: list[dict[str,
         ]
     )
     return [
-        f"Close recap: {key_moves}.",
-        "Focus: leadership, volatility, and breadth confirmation through the session (open → close).",
-        "Actionable: size up only when volatility is contained and leaders confirm; otherwise protect gains and keep a tight watchlist.",
+        f"Market Regime (close): {regime}. {focus}",
+        f"Session recap: {key_moves}.",
+        "Post-close focus: carry forward only A+ leaders that held key EMAs into the close; trim laggards and reset risk.",
+        "Plan for tomorrow: review overnight catalysts, earnings movers, and any after-hours gaps before the pre-market brief.",
     ]
 
 

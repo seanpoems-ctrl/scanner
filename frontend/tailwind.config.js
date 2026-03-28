@@ -11,6 +11,8 @@ export default {
           border: "#1e293b",
         },
         accent: "#22d3ee",
+        "grade-aplus": "#2EE59D",
+        "grade-a": "#B3FF00",
       },
     },
   },
