@@ -507,9 +507,21 @@ async def get_premarket_gappers_endpoint(
     min_mkt_cap_b: float = FQuery(0, ge=0, description="Min market cap, billions USD"),
     min_avg_dollar_vol_m: float = FQuery(0, ge=0, description="Min est avg $ volume (10d avg vol × price), millions USD"),
     limit: int = FQuery(100, ge=10, le=500),
+    badge_preview: bool = FQuery(False, description="TEMP: if true, return only mock EP/U&R rows (no TradingView/Yahoo)"),
 ) -> dict:
     """Pre-market gappers via tradingview-screener (TV scanneramerica); cached ~50s per filter set."""
     global _PREMARKET_GAP_CACHE
+    if badge_preview:
+        mocks = _mock_gap_rows_for_badge_preview()
+        return {
+            "source": "badge_preview",
+            "market": None,
+            "rows": mocks,
+            "row_count": len(mocks),
+            "fetched_at_utc": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+            "short_interest_source": None,
+            "note": "TEMP badge_preview=1 — remove when UI colours are verified",
+        }
     now = monotonic()
     params = PremarketTvParams(
         min_gap_pct=min_gap_pct,
@@ -535,15 +547,20 @@ async def get_premarket_gappers_endpoint(
     uniq_syms = [s for s in dict.fromkeys(s for s in symbols_in_order if s)]
     short_by_sym: dict[str, float | None] = {}
     short_source: str | None = None
-    if uniq_syms:
-        short_by_sym = await fetch_yfinance_short_percent_float_pct_batch(uniq_syms)
-        short_source = "yfinance_short_percent_of_float"
-        # Fallback: if Yahoo throttles / returns nothing, Finviz is a reliable secondary.
-        if not any(v is not None for v in short_by_sym.values()):
-            finviz = await fetch_finviz_short_float_pct_batch(uniq_syms)
-            if any(v is not None for v in finviz.values()):
-                short_by_sym = finviz
-                short_source = "finviz_short_float"
+    try:
+        if uniq_syms:
+            short_by_sym = await fetch_yfinance_short_percent_float_pct_batch(uniq_syms)
+            short_source = "yfinance_short_percent_of_float"
+            # Fallback: if Yahoo throttles / returns nothing, Finviz is a reliable secondary.
+            if not any(v is not None for v in short_by_sym.values()):
+                finviz = await fetch_finviz_short_float_pct_batch(uniq_syms)
+                if any(v is not None for v in finviz.values()):
+                    short_by_sym = finviz
+                    short_source = "finviz_short_float"
+    except Exception:
+        # Yahoo 401 / Finviz 429 etc. must not blank the whole gappers response.
+        short_by_sym = {}
+        short_source = None
     for r, sym in zip(rows, symbols_in_order):
         if sym and short_by_sym.get(sym) is not None:
             r["short_interest_pct"] = short_by_sym[sym]
