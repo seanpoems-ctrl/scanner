@@ -1102,36 +1102,28 @@ function ImpactBadge({ level }: { level: string }) {
 }
 
 // ── Catalyst structured table ──────────────────────────────────────────────
-function CatalystTable({ rows }: { rows: CatalystRow[] }) {
+function CatalystTable({ rows, isModal = false }: { rows: CatalystRow[]; isModal?: boolean }) {
   if (!rows || rows.length === 0) return null;
+  const th = isModal ? "text-[11px]" : "text-[10px]";
+  const td = isModal ? "text-[13px]" : "text-[11px]";
   return (
     <div className="my-2 overflow-x-auto rounded-lg border border-slate-800/80">
-      <table className="w-full text-[11px]">
+      <table className="w-full">
         <thead>
           <tr className="border-b border-slate-800/60 bg-slate-900/40">
-            <th className="px-4 py-2 text-left text-[10px] font-semibold uppercase tracking-widest text-slate-500">
-              Catalyst
-            </th>
-            <th className="px-4 py-2 text-left text-[10px] font-semibold uppercase tracking-widest text-slate-500">
-              Data / Event
-            </th>
-            <th className="px-4 py-2 text-left text-[10px] font-semibold uppercase tracking-widest text-slate-500">
-              Market Impact
-            </th>
-            <th className="px-4 py-2 text-left text-[10px] font-semibold uppercase tracking-widest text-slate-500">
-              Level
-            </th>
+            {["Catalyst", "Data / Event", "Market Impact", "Level"].map((h) => (
+              <th key={h} className={`px-4 py-2 text-left font-semibold uppercase tracking-widest text-slate-500 ${th}`}>
+                {h}
+              </th>
+            ))}
           </tr>
         </thead>
         <tbody>
           {rows.map((row, ri) => (
-            <tr
-              key={ri}
-              className="border-b border-slate-800/60 transition-colors hover:bg-slate-800/10"
-            >
-              <td className="px-4 py-3 font-semibold text-slate-100">{row.catalyst}</td>
-              <td className="px-4 py-3 text-slate-300">{row.event}</td>
-              <td className="px-4 py-3 text-slate-400">{row.impact}</td>
+            <tr key={ri} className="border-b border-slate-800/60 transition-colors hover:bg-slate-800/10">
+              <td className={`px-4 py-3 font-semibold text-slate-100 ${td}`}>{row.catalyst}</td>
+              <td className={`px-4 py-3 text-slate-300 ${td}`}>{row.event}</td>
+              <td className={`px-4 py-3 text-slate-400 ${td}`}>{row.impact}</td>
               <td className="px-4 py-3">
                 <ImpactBadge level={row.impact_level} />
               </td>
@@ -1156,9 +1148,22 @@ function InlineBold({ text }: { text: string }) {
 }
 
 // ── Markdown renderer (shared between side panel and focus modal) ──────────
-function renderBriefMarkdown(brief: IntelBrief): JSX.Element[] {
+// isModal=true applies 20% larger text and tighter leading throughout.
+function renderBriefMarkdown(brief: IntelBrief, isModal: boolean = false): JSX.Element[] {
   // Replace both ```json_catalysts and ```json fences containing the catalyst
   // array with a sentinel so CatalystTable can be injected at that position.
+  // Scale classes: panel uses compact sizes; modal bumps everything ~20%
+  const sz = {
+    genHeader:   isModal ? "text-[13.2px]" : "text-[11px]",
+    section:     isModal ? "text-[11px]"   : "text-[10px]",
+    body:        isModal ? "text-[13.2px]" : "text-[11px]",
+    bullet:      isModal ? "text-[13.2px]" : "text-[11px]",
+    blockquote:  isModal ? "text-[13.2px]" : "text-[11px]",
+    thCell:      isModal ? "text-[10px]"   : "text-[9px]",
+    tdCell:      isModal ? "text-[12px]"   : "text-[10px]",
+    leading:     isModal ? "leading-snug"  : "leading-relaxed",
+  };
+
   const cleanedMarkdown = brief.markdown!
     .replace(/```json_catalysts[\s\S]*?```/g, "___CATALYST_TABLE___")
     .replace(/```json\s*\[[\s\S]*?\]\s*```/g, "___CATALYST_TABLE___");
@@ -1176,11 +1181,11 @@ function renderBriefMarkdown(brief: IntelBrief): JSX.Element[] {
       const bodyRows = rows.slice(2);
       rendered.push(
         <div key={`tbl-${rendered.length}`} className="my-2 overflow-x-auto rounded-lg border border-slate-800/60">
-          <table className="w-full text-[10px]">
+          <table className="w-full">
             <thead>
               <tr className="border-b border-slate-800/60 bg-slate-900/40">
                 {headers.map((h) => (
-                  <th key={h} className="px-4 py-2 text-left text-[9px] font-semibold uppercase tracking-widest text-slate-500">{h}</th>
+                  <th key={h} className={`px-4 py-2 text-left font-semibold uppercase tracking-widest text-slate-500 ${sz.thCell}`}>{h}</th>
                 ))}
               </tr>
             </thead>
@@ -1190,7 +1195,7 @@ function renderBriefMarkdown(brief: IntelBrief): JSX.Element[] {
                 return (
                   <tr key={ri} className="border-b border-slate-800/50 hover:bg-slate-800/10">
                     {cells.map((c, ci) => (
-                      <td key={ci} className="px-4 py-2.5 text-slate-300"><InlineBold text={c} /></td>
+                      <td key={ci} className={`px-4 py-2.5 text-slate-300 ${sz.tdCell}`}><InlineBold text={c} /></td>
                     ))}
                   </tr>
                 );
@@ -1215,31 +1220,31 @@ function renderBriefMarkdown(brief: IntelBrief): JSX.Element[] {
     if (inMdTable) flushMarkdownTable();
 
     if (trimmed === "___CATALYST_TABLE___") {
-      rendered.push(<CatalystTable key={`cat-${i}`} rows={brief.catalysts ?? []} />);
+      rendered.push(<CatalystTable key={`cat-${i}`} rows={brief.catalysts ?? []} isModal={isModal} />);
       return;
     }
 
     if (trimmed.startsWith("## ")) {
       rendered.push(
         <div key={i} className="mt-4 flex items-center gap-2 rounded-lg border border-accent/30 bg-terminal-elevated px-3 py-2">
-          <p className="font-mono text-[11px] font-bold text-accent">{trimmed.slice(3)}</p>
+          <p className={`font-mono font-bold text-accent ${sz.genHeader}`}>{trimmed.slice(3)}</p>
         </div>
       );
     } else if (trimmed.startsWith("### ")) {
       rendered.push(
-        <h3 key={i} className="mt-4 border-b border-terminal-border/40 pb-1 text-[10px] font-semibold uppercase tracking-widest text-slate-400">
+        <h3 key={i} className={`mt-4 border-b border-terminal-border/40 pb-1 font-semibold uppercase tracking-widest text-slate-400 ${sz.section}`}>
           {trimmed.slice(4)}
         </h3>
       );
     } else if (trimmed.startsWith("> ")) {
       rendered.push(
-        <blockquote key={i} className="my-2 rounded-r border-l-2 border-accent/60 bg-terminal-elevated/50 py-2 pl-3 pr-2 italic text-[11px] text-slate-200">
+        <blockquote key={i} className={`my-2 rounded-r border-l-2 border-accent/60 bg-terminal-elevated/50 py-2 pl-3 pr-2 italic text-slate-200 ${sz.blockquote}`}>
           <InlineBold text={trimmed.slice(2)} />
         </blockquote>
       );
     } else if (trimmed.startsWith("- ") || trimmed.startsWith("* ")) {
       rendered.push(
-        <p key={i} className="flex gap-2 text-[11px] leading-relaxed text-slate-300">
+        <p key={i} className={`flex gap-2 text-slate-300 ${sz.bullet} ${sz.leading}`}>
           <span className="mt-0.5 shrink-0 text-slate-600">•</span>
           <span><InlineBold text={trimmed.slice(2)} /></span>
         </p>
@@ -1250,7 +1255,7 @@ function renderBriefMarkdown(brief: IntelBrief): JSX.Element[] {
       // skip code fences and blank lines
     } else {
       rendered.push(
-        <p key={i} className="text-[11px] leading-relaxed text-slate-300">
+        <p key={i} className={`text-slate-300 ${sz.body} ${sz.leading}`}>
           <InlineBold text={trimmed} />
         </p>
       );
@@ -1261,9 +1266,14 @@ function renderBriefMarkdown(brief: IntelBrief): JSX.Element[] {
 }
 
 // ── Main panel (side drawer) + Focus Modal ─────────────────────────────────
-function IntelBriefPanel({ brief, loading }: { brief: IntelBrief | null; loading: boolean }) {
-  const [isExpanded, setIsExpanded] = useState(false);
-
+// IntelBriefPanel — compact scrollable side view (OPEN button lives in IntelBriefCard header)
+function IntelBriefPanel({
+  brief,
+  loading,
+}: {
+  brief: IntelBrief | null;
+  loading: boolean;
+}) {
   if (loading) {
     return (
       <div className="flex flex-col gap-2 p-3">
@@ -1282,24 +1292,95 @@ function IntelBriefPanel({ brief, loading }: { brief: IntelBrief | null; loading
     );
   }
 
-  const rendered = renderBriefMarkdown(brief);
+  const rendered = renderBriefMarkdown(brief, false);
+
+  return (
+    <article className="space-y-1 p-3">
+      {rendered}
+    </article>
+  );
+}
+
+// ── Updated MarketBriefCard using Intelligence Brief ──────────────────────
+
+function IntelBriefCard({
+  mode,
+  onModeChange,
+  pre,
+  post,
+  loading,
+  onRefresh,
+}: {
+  mode: "pre" | "post";
+  onModeChange: (m: "pre" | "post") => void;
+  pre: IntelBrief | null;
+  post: IntelBrief | null;
+  loading: boolean;
+  onRefresh: (t: "pre" | "post") => void;
+}) {
+  const [isExpanded, setIsExpanded] = useState(false);
+  const brief = mode === "pre" ? pre : post;
+  const now_et_h = new Date().toLocaleString("en-US", { timeZone: "America/New_York", hour: "numeric", hour12: false });
+  const autoMode: "pre" | "post" = Number(now_et_h) < 17 ? "pre" : "post";
 
   return (
     <>
-      {/* Side-panel: compact view with expand button */}
-      <article className="space-y-1 p-3">
-        {rendered}
-        <button
-          type="button"
-          onClick={() => setIsExpanded(true)}
-          className="mt-3 w-full rounded-lg border border-terminal-border/60 bg-terminal-elevated py-1.5 text-[10px] font-semibold uppercase tracking-widest text-slate-500 transition-colors hover:border-accent/40 hover:text-white"
-        >
-          ↗ Open Full Brief
-        </button>
-      </article>
+      <section className="flex min-h-0 flex-col rounded-xl border border-terminal-border bg-terminal-card shadow-sm">
+        <header className="shrink-0 border-b border-terminal-border px-3 py-2">
+          <div className="flex items-center justify-between gap-2">
+            {/* Left: icon + title + gen timestamp */}
+            <div className="flex min-w-0 items-center gap-1.5">
+              {mode === "pre"
+                ? <Sunrise className="h-3.5 w-3.5 shrink-0 text-amber-300" aria-hidden />
+                : <Moon className="h-3.5 w-3.5 shrink-0 text-sky-300" aria-hidden />}
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                Market Intelligence
+              </span>
+              {brief?.gen_time_et && (
+                <span className="font-mono text-[9px] text-slate-600">· Gen {brief.gen_time_et}</span>
+              )}
+            </div>
+            {/* Right: PRE/POST toggle + OPEN + refresh */}
+            <div className="flex shrink-0 items-center gap-1.5">
+              <div className="flex items-center gap-1 rounded-full border border-terminal-border bg-terminal-bg p-0.5">
+                <button type="button" onClick={() => onModeChange("pre")}
+                  className={`rounded-full px-2 py-0.5 text-[10px] font-semibold transition-colors ${mode === "pre" ? "bg-accent/20 text-white" : "text-slate-500 hover:text-white"}`}>
+                  PRE
+                </button>
+                <button type="button" onClick={() => onModeChange("post")}
+                  className={`rounded-full px-2 py-0.5 text-[10px] font-semibold transition-colors ${mode === "post" ? "bg-accent/20 text-white" : "text-slate-500 hover:text-white"}`}>
+                  POST
+                </button>
+              </div>
+              {/* OPEN button — tight, w-fit, mono, terminal-style */}
+              <button
+                type="button"
+                disabled={!brief?.markdown}
+                onClick={() => setIsExpanded(true)}
+                className="w-fit rounded border border-slate-700 bg-transparent px-2 py-0.5 font-mono text-[9px] font-semibold text-slate-400 transition-colors hover:border-slate-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-30"
+              >
+                OPEN
+              </button>
+              <button type="button" disabled={loading} title="Regenerate brief"
+                onClick={() => onRefresh(mode)}
+                className="rounded-md border border-terminal-border bg-terminal-bg px-2 py-0.5 text-[9px] font-semibold text-slate-500 hover:border-accent/30 hover:text-white disabled:opacity-40">
+                {loading ? "…" : "↺"}
+              </button>
+            </div>
+          </div>
+          {autoMode !== mode && (
+            <p className="mt-1 text-[9px] text-slate-600">
+              Auto-display: {autoMode === "pre" ? "Pre-Market" : "Post-Market"} · switch above to compare
+            </p>
+          )}
+        </header>
+        <div className="fintech-scroll min-h-0 flex-1 overflow-y-auto">
+          <IntelBriefPanel brief={brief} loading={loading} />
+        </div>
+      </section>
 
-      {/* Focus Modal: full-width centered overlay */}
-      {isExpanded && (
+      {/* ── Focus Modal ── */}
+      {isExpanded && brief?.markdown && (
         <div
           className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/80 backdrop-blur-xl"
           onClick={(e) => { if (e.target === e.currentTarget) setIsExpanded(false); }}
@@ -1323,86 +1404,20 @@ function IntelBriefPanel({ brief, loading }: { brief: IntelBrief | null; loading
               <button
                 type="button"
                 onClick={() => setIsExpanded(false)}
-                className="rounded-full p-1 text-slate-500 hover:bg-terminal-elevated hover:text-white"
+                className="rounded-full p-1 text-slate-500 transition-colors hover:bg-terminal-elevated hover:text-white"
                 aria-label="Close"
               >
                 ✕
               </button>
             </div>
-            {/* Modal body */}
-            <article className="space-y-1.5 px-5 py-4">
-              {rendered}
+            {/* Modal body — 20% larger base text, tighter leading */}
+            <article className="space-y-2 px-6 py-5 text-[13.2px] leading-snug">
+              {renderBriefMarkdown(brief, true)}
             </article>
           </div>
         </div>
       )}
     </>
-  );
-}
-
-// ── Updated MarketBriefCard using Intelligence Brief (no Generate button) ─────
-
-function IntelBriefCard({
-  mode,
-  onModeChange,
-  pre,
-  post,
-  loading,
-  onRefresh,
-}: {
-  mode: "pre" | "post";
-  onModeChange: (m: "pre" | "post") => void;
-  pre: IntelBrief | null;
-  post: IntelBrief | null;
-  loading: boolean;
-  onRefresh: (t: "pre" | "post") => void;
-}) {
-  const brief = mode === "pre" ? pre : post;
-  const now_et_h = new Date().toLocaleString("en-US", { timeZone: "America/New_York", hour: "numeric", hour12: false });
-  // Auto-select: pre-market until 16:54, post-market from 16:55 ET
-  const autoMode: "pre" | "post" = Number(now_et_h) < 17 ? "pre" : "post";
-
-  return (
-    <section className="flex min-h-0 flex-col rounded-xl border border-terminal-border bg-terminal-card shadow-sm">
-      <header className="shrink-0 border-b border-terminal-border px-3 py-2 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-1.5">
-            {mode === "pre"
-              ? <Sunrise className="h-3.5 w-3.5 text-amber-300" aria-hidden />
-              : <Moon className="h-3.5 w-3.5 text-sky-300" aria-hidden />}
-            <span>Market Intelligence</span>
-            {brief?.gen_time_et && (
-              <span className="ml-1 font-mono text-[9px] text-slate-600">Gen {brief.gen_time_et}</span>
-            )}
-          </div>
-          <div className="flex items-center gap-1.5">
-            <div className="flex items-center gap-1 rounded-full border border-terminal-border bg-terminal-bg p-0.5">
-              <button type="button" onClick={() => onModeChange("pre")}
-                className={`rounded-full px-2 py-0.5 text-[10px] font-semibold transition-colors ${mode === "pre" ? "bg-accent/20 text-white" : "text-slate-500 hover:text-white"}`}>
-                PRE
-              </button>
-              <button type="button" onClick={() => onModeChange("post")}
-                className={`rounded-full px-2 py-0.5 text-[10px] font-semibold transition-colors ${mode === "post" ? "bg-accent/20 text-white" : "text-slate-500 hover:text-white"}`}>
-                POST
-              </button>
-            </div>
-            <button type="button" disabled={loading} title="Regenerate brief"
-              onClick={() => onRefresh(mode)}
-              className="rounded-md border border-terminal-border bg-terminal-bg px-2 py-0.5 text-[9px] font-semibold text-slate-500 hover:border-accent/30 hover:text-white disabled:opacity-40">
-              {loading ? "…" : "↺"}
-            </button>
-          </div>
-        </div>
-        {autoMode !== mode && (
-          <p className="mt-1 text-[9px] text-slate-600">
-            Auto-display: {autoMode === "pre" ? "Pre-Market" : "Post-Market"} · switch above to compare
-          </p>
-        )}
-      </header>
-      <div className="fintech-scroll min-h-0 flex-1 overflow-y-auto">
-        <IntelBriefPanel brief={brief} loading={loading} />
-      </div>
-    </section>
   );
 }
 
