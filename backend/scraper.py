@@ -1208,20 +1208,39 @@ async def build_finviz_industry_leaderboard_rows() -> list[dict[str, Any]]:
     ind_filter_map = await fetch_finviz_industry_filter_map()
     h1, rows1 = _parse_finviz_groups_data_rows(ov_html)
     h2, rows2 = _parse_finviz_groups_data_rows(perf_html)
-    ni1 = _header_exact_idx(h1, "name")
-    ni2 = _header_exact_idx(h2, "name")
+    logger.info("Industry overview headers: %s", h1)
+    logger.info("Industry perf headers:     %s", h2)
+
+    def _find_col(headers: list[str], *candidates: str) -> int | None:
+        """Case-insensitive, substring-tolerant header search."""
+        for cand in candidates:
+            cand_l = cand.lower()
+            for i, h in enumerate(headers):
+                if h.lower() == cand_l:
+                    return i
+            # substring fallback (e.g. "industry name" contains "name")
+            for i, h in enumerate(headers):
+                if cand_l in h.lower():
+                    return i
+        return None
+
+    ni1 = _find_col(h1, "name", "industry", "group", "sector")
+    ni2 = _find_col(h2, "name", "industry", "group", "sector")
     if ni1 is None or ni2 is None:
-        logger.warning("Industry table parse failed (name column).")
+        logger.warning(
+            "Industry table parse failed (name column). "
+            "overview_headers=%s  perf_headers=%s", h1, h2
+        )
         return []
 
-    stocks_i = _header_exact_idx(h1, "stocks")
-    mcap_i = _header_exact_idx(h1, "market cap")
-    ch1_i = _header_exact_idx(h1, "change")
-    pw = _header_exact_idx(h2, "perf week")
-    pm = _header_exact_idx(h2, "perf month")
-    pq = _header_exact_idx(h2, "perf quart")
-    ph = _header_exact_idx(h2, "perf half")
-    ch2_i = _header_exact_idx(h2, "change")
+    stocks_i = _find_col(h1, "stocks", "# stocks", "count")
+    mcap_i   = _find_col(h1, "market cap", "mkt cap", "cap")
+    ch1_i    = _find_col(h1, "change", "chg", "1d")
+    pw       = _find_col(h2, "perf week", "week", "1w", "perf 1w")
+    pm       = _find_col(h2, "perf month", "month", "1m", "perf 1m")
+    pq       = _find_col(h2, "perf quart", "quarter", "3m", "quart")
+    ph       = _find_col(h2, "perf half", "half", "6m", "perf 6m")
+    ch2_i    = _find_col(h2, "change", "chg", "1d")
 
     overview: dict[str, dict[str, Any]] = {}
     for cells in rows1:
