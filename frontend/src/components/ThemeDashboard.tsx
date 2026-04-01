@@ -1094,7 +1094,7 @@ function ImpactBadge({ level }: { level: string }) {
       : "text-amber-200 font-semibold border-amber-200/50 bg-amber-200/10"; // Medium
   return (
     <span
-      className={`inline-block rounded border px-1.5 py-0.5 text-[9px] uppercase tracking-widest ${styles}`}
+      className={`inline-block min-w-[80px] rounded border px-1.5 py-0.5 text-center text-[9px] uppercase tracking-widest ${styles}`}
     >
       {level || "Medium"}
     </span>
