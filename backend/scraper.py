@@ -1201,7 +1201,22 @@ _INDUSTRY_SEED_ROWS: list[dict[str, Any]] = [
 ]
 
 
+def _find_col(headers: list[str], *candidates: str) -> int | None:
+    """Case-insensitive, substring-tolerant header search."""
+    for cand in candidates:
+        cand_l = cand.lower()
+        for i, h in enumerate(headers):
+            if h.lower() == cand_l:
+                return i
+        for i, h in enumerate(headers):
+            if cand_l in h.lower():
+                return i
+    return None
+
+
 async def build_finviz_industry_leaderboard_rows() -> list[dict[str, Any]]:
+    # Fetch overview (v=110: name/stocks/mcap/change) and perf (v=140: 1W/1M/3M/6M).
+    # Both use the same HTML table format; if perf fails we degrade to 1D-only.
     ov_html, perf_html = await asyncio.gather(
         _fetch_finviz_document(FINVIZ_INDUSTRY_OVERVIEW_URL),
         _fetch_finviz_document(FINVIZ_INDUSTRY_PERF_URL),
@@ -1210,45 +1225,44 @@ async def build_finviz_industry_leaderboard_rows() -> list[dict[str, Any]]:
     h1, rows1 = _parse_finviz_groups_data_rows(ov_html)
     h2, rows2 = _parse_finviz_groups_data_rows(perf_html)
     logger.info("Industry overview headers: %s", h1)
-    logger.info("Industry perf headers:     %s", h2)
-
-    def _find_col(headers: list[str], *candidates: str) -> int | None:
-        """Case-insensitive, substring-tolerant header search."""
-        for cand in candidates:
-            cand_l = cand.lower()
-            for i, h in enumerate(headers):
-                if h.lower() == cand_l:
-                    return i
-            # substring fallback (e.g. "industry name" contains "name")
-            for i, h in enumerate(headers):
-                if cand_l in h.lower():
-                    return i
-        return None
+    logger.info("Industry perf    headers: %s", h2)
 
     ni1 = _find_col(h1, "name", "industry", "group", "sector")
     if ni1 is None:
-        logger.warning(
-            "Industry overview parse failed (no name column). headers=%s", h1
-        )
+        logger.warning("Industry overview parse failed (no name column). headers=%s", h1)
         return []
 
-    # Perf table (v=140) may also fail — degrade gracefully to overview-only.
+    # Perf table optional — degrade gracefully when it can't be parsed.
     ni2 = _find_col(h2, "name", "industry", "group", "sector") if h2 else None
-    perf_available = ni2 is not None
-    if not perf_available:
-        logger.warning(
-            "Industry perf table empty/unparseable — using overview data only (1D only). "
-            "perf_headers=%s", h2
-        )
+    perf_ok = ni2 is not None
+    if not perf_ok:
+        logger.warning("Industry perf table unparseable — 1W/1M/3M/6M will be None. headers=%s", h2)
 
     stocks_i = _find_col(h1, "stocks", "# stocks", "count")
     mcap_i   = _find_col(h1, "market cap", "mkt cap", "cap")
     ch1_i    = _find_col(h1, "change", "chg", "1d")
-    pw       = _find_col(h2, "perf week", "week", "1w", "perf 1w")  if perf_available else None
-    pm       = _find_col(h2, "perf month", "month", "1m", "perf 1m") if perf_available else None
-    pq       = _find_col(h2, "perf quart", "quarter", "3m", "quart") if perf_available else None
-    ph       = _find_col(h2, "perf half", "half", "6m", "perf 6m")  if perf_available else None
-    ch2_i    = _find_col(h2, "change", "chg", "1d")                  if perf_available else None
+    # Also try to pull multi-horizon columns directly from overview (v=110 has them sometimes)
+    pw_ov    = _find_col(h1, "perf week", "week", "1w")
+    pm_ov    = _find_col(h1, "perf month", "month", "1m")
+    pq_ov    = _find_col(h1, "perf quart", "quarter", "3m", "quart")
+    ph_ov    = _find_col(h1, "perf half", "half", "6m")
+
+    pw2 = _find_col(h2, "perf week",  "week",    "1w", "perf 1w")  if perf_ok else None
+    pm2 = _find_col(h2, "perf month", "month",   "1m", "perf 1m") if perf_ok else None
+    pq2 = _find_col(h2, "perf quart", "quarter", "3m", "quart")   if perf_ok else None
+    ph2 = _find_col(h2, "perf half",  "half",    "6m", "perf 6m") if perf_ok else None
+    ch2_i = _find_col(h2, "change", "chg", "1d")                   if perf_ok else None
+
+    def _pct_cell(cells: list[str], idx: int | None) -> float | None:
+        if idx is None or idx >= len(cells):
+            return None
+        raw = cells[idx].strip()
+        if not raw:
+            return None
+        try:
+            return _parse_percent(raw)
+        except ValueError:
+            return None
 
     overview: dict[str, dict[str, Any]] = {}
     for cells in rows1:
@@ -1265,18 +1279,16 @@ async def build_finviz_industry_leaderboard_rows() -> list[dict[str, Any]]:
             except ValueError:
                 stocks = 0
         mcap_blob = cells[mcap_i] if mcap_i is not None and mcap_i < len(cells) else ""
-        chg: float | None = None
-        if ch1_i is not None and ch1_i < len(cells):
-            try:
-                chg = _parse_percent(cells[ch1_i])
-            except ValueError:
-                chg = None
         overview[key] = {
             "name": raw_name,
             "stocks": stocks,
             "market_cap_blob": mcap_blob,
             "themeDollarVolume": _parse_compact_number(mcap_blob) if mcap_blob else 0.0,
-            "change_ov": chg,
+            "change_ov": _pct_cell(cells, ch1_i),
+            "pw_ov": _pct_cell(cells, pw_ov),
+            "pm_ov": _pct_cell(cells, pm_ov),
+            "pq_ov": _pct_cell(cells, pq_ov),
+            "ph_ov": _pct_cell(cells, ph_ov),
         }
 
     perf_map: dict[str, dict[str, float | None]] = {}
@@ -1287,44 +1299,35 @@ async def build_finviz_industry_leaderboard_rows() -> list[dict[str, Any]]:
         if not raw_name:
             continue
         key = _normalize_group_name(raw_name)
-
-        def cell_pct(idx: int | None) -> float | None:
-            if idx is None or idx >= len(cells):
-                return None
-            raw = cells[idx].strip()
-            if not raw:
-                return None
-            try:
-                return _parse_percent(raw)
-            except ValueError:
-                return None
-
         perf_map[key] = {
-            "pw": cell_pct(pw),
-            "pm": cell_pct(pm),
-            "pq": cell_pct(pq),
-            "ph": cell_pct(ph),
-            "ch": cell_pct(ch2_i),
+            "pw": _pct_cell(cells, pw2),
+            "pm": _pct_cell(cells, pm2),
+            "pq": _pct_cell(cells, pq2),
+            "ph": _pct_cell(cells, ph2),
+            "ch": _pct_cell(cells, ch2_i),
         }
 
     themes: list[dict[str, Any]] = []
     for key, ov in overview.items():
         p = perf_map.get(key, {})
-        ch_ov = ov.get("change_ov")
-        ch_pr = p.get("ch")
-        perf1d = ch_pr if ch_pr is not None else ch_ov
-        pm = p.get("pm")
+        # 1D: prefer perf table change, fall back to overview change
+        perf1d = p.get("ch") if p.get("ch") is not None else ov.get("change_ov")
+        # multi-horizon: prefer perf table, fall back to overview columns
+        perf1w = p.get("pw") if p.get("pw") is not None else ov.get("pw_ov")
+        pm_val = p.get("pm") if p.get("pm") is not None else ov.get("pm_ov")
+        perf3m = p.get("pq") if p.get("pq") is not None else ov.get("pq_ov")
+        perf6m = p.get("ph") if p.get("ph") is not None else ov.get("ph_ov")
         raw_name = ov["name"]
         thematic_label = INDUSTRY_THEME_MAP.get(raw_name, "")
         row = _series_theme_dict(
             theme=raw_name,
             sector="Industry",
-            rs1m=pm,
+            rs1m=pm_val,
             perf1d=perf1d,
-            perf1w=p.get("pw"),
-            perf1m=pm,
-            perf3m=p.get("pq"),
-            perf6m=p.get("ph"),
+            perf1w=perf1w,
+            perf1m=pm_val,
+            perf3m=perf3m,
+            perf6m=perf6m,
             total_count=int(ov.get("stocks", 0)),
             theme_dollar_volume=float(ov.get("themeDollarVolume", 0.0)),
         )
