@@ -65,8 +65,9 @@ FINVIZ_GROUPS_URL = (
 FINVIZ_SECTOR_ROTATION_URL = "https://finviz.com/groups.ashx?g=sector&v=110&o=-perf1d"
 # Industry groups (HTML tables); Performance tab adds multi-horizon %.
 FINVIZ_INDUSTRY_OVERVIEW_URL = f"{FINVIZ_BASE_URL}/groups.ashx?g=industry&v=110&o=name&st=d1"
-# v=210 is the "Performance" view: adds YTD, 1Y, 3Y columns vs the lighter v=140.
-FINVIZ_INDUSTRY_PERF_URL = f"{FINVIZ_BASE_URL}/groups.ashx?g=industry&v=210&o=name&st=d1"
+# v=140 is the "Performance" view with 1W/1M/3M/6M columns in a standard table.
+# v=210 uses a different table structure that our BeautifulSoup parser can't read.
+FINVIZ_INDUSTRY_PERF_URL = f"{FINVIZ_BASE_URL}/groups.ashx?g=industry&v=140&o=name&st=d1"
 
 # ---------------------------------------------------------------------------
 # Thematic label map  (Finviz industry name → "Elite Rubric" bucket)
@@ -1225,22 +1226,29 @@ async def build_finviz_industry_leaderboard_rows() -> list[dict[str, Any]]:
         return None
 
     ni1 = _find_col(h1, "name", "industry", "group", "sector")
-    ni2 = _find_col(h2, "name", "industry", "group", "sector")
-    if ni1 is None or ni2 is None:
+    if ni1 is None:
         logger.warning(
-            "Industry table parse failed (name column). "
-            "overview_headers=%s  perf_headers=%s", h1, h2
+            "Industry overview parse failed (no name column). headers=%s", h1
         )
         return []
+
+    # Perf table (v=140) may also fail — degrade gracefully to overview-only.
+    ni2 = _find_col(h2, "name", "industry", "group", "sector") if h2 else None
+    perf_available = ni2 is not None
+    if not perf_available:
+        logger.warning(
+            "Industry perf table empty/unparseable — using overview data only (1D only). "
+            "perf_headers=%s", h2
+        )
 
     stocks_i = _find_col(h1, "stocks", "# stocks", "count")
     mcap_i   = _find_col(h1, "market cap", "mkt cap", "cap")
     ch1_i    = _find_col(h1, "change", "chg", "1d")
-    pw       = _find_col(h2, "perf week", "week", "1w", "perf 1w")
-    pm       = _find_col(h2, "perf month", "month", "1m", "perf 1m")
-    pq       = _find_col(h2, "perf quart", "quarter", "3m", "quart")
-    ph       = _find_col(h2, "perf half", "half", "6m", "perf 6m")
-    ch2_i    = _find_col(h2, "change", "chg", "1d")
+    pw       = _find_col(h2, "perf week", "week", "1w", "perf 1w")  if perf_available else None
+    pm       = _find_col(h2, "perf month", "month", "1m", "perf 1m") if perf_available else None
+    pq       = _find_col(h2, "perf quart", "quarter", "3m", "quart") if perf_available else None
+    ph       = _find_col(h2, "perf half", "half", "6m", "perf 6m")  if perf_available else None
+    ch2_i    = _find_col(h2, "change", "chg", "1d")                  if perf_available else None
 
     overview: dict[str, dict[str, Any]] = {}
     for cells in rows1:
@@ -1273,7 +1281,7 @@ async def build_finviz_industry_leaderboard_rows() -> list[dict[str, Any]]:
 
     perf_map: dict[str, dict[str, float | None]] = {}
     for cells in rows2:
-        if len(cells) <= ni2:
+        if ni2 is None or len(cells) <= ni2:
             continue
         raw_name = cells[ni2].strip()
         if not raw_name:
