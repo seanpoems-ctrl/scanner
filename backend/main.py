@@ -28,6 +28,9 @@ try:
         fetch_yfinance_short_percent_float_pct_batch,
         fetch_tradingview_tape,
         get_industry_theme_map,
+        FINVIZ_INDUSTRY_OVERVIEW_URL,
+        FINVIZ_INDUSTRY_PERF_URL,
+        BROWSER_HEADERS,
     )
     from backend.theme_universe import ThemeUniverseStore, scheduled_refresh_loop
     from backend.news_brief import (
@@ -51,6 +54,9 @@ except ModuleNotFoundError:
         fetch_yfinance_short_percent_float_pct_batch,
         fetch_tradingview_tape,
         get_industry_theme_map,
+        FINVIZ_INDUSTRY_OVERVIEW_URL,
+        FINVIZ_INDUSTRY_PERF_URL,
+        BROWSER_HEADERS,
     )
     from theme_universe import ThemeUniverseStore, scheduled_refresh_loop
     from news_brief import (
@@ -372,6 +378,34 @@ async def get_themes(view: str = "themes") -> dict:
 async def get_industry_theme_map_endpoint() -> dict:
     """Return the static INDUSTRY_THEME_MAP for frontend drill-down grouping."""
     return {"map": get_industry_theme_map()}
+
+
+@app.get("/api/debug/finviz-probe")
+async def debug_finviz_probe() -> dict:
+    """
+    Probes Finviz from Render's IP and returns HTTP status + first 400 chars of response.
+    Use to diagnose bot-blocks without tailing logs.
+    """
+    import httpx as _httpx
+    results: dict[str, Any] = {}
+    urls = {
+        "themes_api": "https://finviz.com/api/map_perf.ashx?t=themes&st=d1",
+        "industry_groups": FINVIZ_INDUSTRY_OVERVIEW_URL,
+        "industry_perf": FINVIZ_INDUSTRY_PERF_URL,
+    }
+    async with _httpx.AsyncClient(timeout=15.0, headers=BROWSER_HEADERS, follow_redirects=True) as client:
+        for key, url in urls.items():
+            try:
+                r = await client.get(url)
+                results[key] = {
+                    "status": r.status_code,
+                    "content_type": r.headers.get("content-type", ""),
+                    "body_preview": r.text[:400],
+                }
+            except Exception as exc:
+                results[key] = {"error": str(exc)}
+    results["cache_meta"] = {k: dict(v) for k, v in _THEMES_META.items()}
+    return results
 
 
 _INTEL_REFRESH_TASK: asyncio.Task[None] | None = None

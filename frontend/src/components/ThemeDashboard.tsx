@@ -38,6 +38,7 @@ type ApiTheme = {
   theme: string;
   sector?: string;
   thematicLabel?: string;
+  seed?: boolean;
   relativeStrength1M: number | null;
   perf1D?: number | null;
   perf1W?: number | null;
@@ -2012,10 +2013,10 @@ const ScannerView = memo(function ScannerView({
                   <tr>
                     <td colSpan={10} className="px-3 py-8 text-center">
                       <p className="text-xs text-slate-500">
-                        No {leaderboardMode} data yet — Finviz may be warming up or rate-limiting.
+                        No {leaderboardMode} data yet.
                       </p>
                       <p className="mt-1 text-[10px] text-slate-600">
-                        The backend fetches live on first load (10–30 s). Try switching tabs or refreshing the page.
+                        Retrying automatically every 15 s. Finviz may be rate-limiting the server.
                       </p>
                     </td>
                   </tr>
@@ -2048,7 +2049,14 @@ const ScannerView = memo(function ScannerView({
                           <td className="px-3 py-2 text-right font-mono tabular-nums text-slate-500">{rankNumber}</td>
                           <td className="px-3 py-2">
                             <div className="min-w-0">
-                              <p className="truncate font-medium text-slate-100">{t.theme}</p>
+                              <p className={`truncate font-medium ${t.seed ? "text-slate-500 italic" : "text-slate-100"}`}>
+                                {t.theme}
+                                {t.seed && (
+                                  <span className="ml-1.5 rounded bg-slate-800 px-1 py-px font-mono text-[8px] not-italic text-slate-600">
+                                    awaiting data
+                                  </span>
+                                )}
+                              </p>
                               <p className="flex flex-wrap items-center gap-x-1.5 truncate text-[10px] text-slate-600">
                                 {t.qualifiedCount}/{t.totalCount} · {t.sector ?? "—"} · {formatMoney(t.themeDollarVolume)}
                                 {/* Thematic bucket pill — only in industry mode */}

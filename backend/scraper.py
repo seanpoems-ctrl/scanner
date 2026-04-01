@@ -1186,6 +1186,20 @@ def _series_theme_dict(
     }
 
 
+_INDUSTRY_SEED_ROWS: list[dict[str, Any]] = [
+    _series_theme_dict(theme=n, sector="Industry", rs1m=None, perf1d=None, perf1w=None,
+                       perf1m=None, perf3m=None, perf6m=None, total_count=0, theme_dollar_volume=0.0)
+    | {"thematicLabel": INDUSTRY_THEME_MAP.get(n, ""), "seed": True}
+    for n in [
+        "Semiconductors", "Software - Application", "Software - Infrastructure",
+        "Biotechnology", "Aerospace & Defense", "Solar", "Oil & Gas E&P",
+        "Banks - Regional", "Internet Retail", "Auto Manufacturers",
+        "Medical Devices", "Asset Management", "Electronic Components",
+        "Internet Content & Information", "Drug Manufacturers - General",
+    ]
+]
+
+
 async def build_finviz_industry_leaderboard_rows() -> list[dict[str, Any]]:
     ov_html, perf_html = await asyncio.gather(
         _fetch_finviz_document(FINVIZ_INDUSTRY_OVERVIEW_URL),
@@ -1315,6 +1329,13 @@ async def build_finviz_industry_leaderboard_rows() -> list[dict[str, Any]]:
         pool.sort(key=lambda x: x.adr_pct, reverse=True)
         return [s.ticker for s in pool[:5]]
 
+    if not themes:
+        logger.warning(
+            "Finviz industry scrape returned 0 rows (likely IP block or parse failure). "
+            "Returning seed placeholder rows so UI is never blank."
+        )
+        return list(_INDUSTRY_SEED_ROWS)
+
     enrich_n = min(25, len(themes))
     leaders_lists = await asyncio.gather(*(leaders_for_industry(themes[i]["theme"]) for i in range(enrich_n)))
     for i in range(enrich_n):
@@ -1348,6 +1369,31 @@ async def _fetch_finviz_theme_map_nodes(client: httpx.AsyncClient, st: str) -> d
     return _parse_finviz_map_perf_nodes(response.json())
 
 
+_THEMES_SEED_ROWS: list[dict[str, Any]] = [
+    _series_theme_dict(theme=n, sector="Finviz Theme", rs1m=None, perf1d=None,
+                       perf1w=None, perf1m=None, perf3m=None, perf6m=None,
+                       total_count=0, theme_dollar_volume=0.0)
+    | {"seed": True}
+    for n in [
+        "AI · Artificial Intelligence",
+        "Cybersecurity",
+        "Cloud Computing",
+        "Semiconductors",
+        "Renewable Energy",
+        "Biotech · Genomics",
+        "Electric Vehicles",
+        "Space · Aerospace",
+        "Fintech",
+        "Robotics · Automation",
+        "Healthcare · Diagnostics",
+        "Defense · Government",
+        "Social Media",
+        "Streaming · Entertainment",
+        "Blockchain · Crypto",
+    ]
+]
+
+
 async def build_finviz_themes_map_rows() -> list[dict[str, Any]]:
     async with httpx.AsyncClient(timeout=25.0, headers=BROWSER_HEADERS, follow_redirects=True) as client:
         d1, w1, w4, w13, w26 = await asyncio.gather(
@@ -1359,8 +1405,11 @@ async def build_finviz_themes_map_rows() -> list[dict[str, Any]]:
         )
     all_slugs = set(d1) | set(w1) | set(w4) | set(w13) | set(w26)
     if not all_slugs:
-        logger.warning("map_perf themes: no nodes across horizons.")
-        return []
+        logger.warning(
+            "map_perf themes: no nodes returned (likely Finviz IP block on cloud host). "
+            "Returning seed placeholders."
+        )
+        return _THEMES_SEED_ROWS
 
     def pick(m: dict[str, float], key: str) -> float | None:
         v = m.get(key)
