@@ -218,8 +218,22 @@ def _fetch_s5fi_sync(*, history_days: int = 10) -> tuple[float | None, list[dict
 
 
 # ---------------------------------------------------------------------------
-# Speedboat count: stocks up >4% on the day, vol >100k, price >$5
+# Speedboat count — institutional-grade elite momentum filter
+# Criteria (ALL must be met):
+#   Price          > $12
+#   Avg $ Vol 30d  > $100 M/day
+#   Daily change   > +4%
+#   ADR% 20d       > 4%   (average daily range as % of price)
+#   Market cap     > $2 B  (yfinance fast_info, best-effort)
 # ---------------------------------------------------------------------------
+
+# Minimum market-cap tiers (yfinance fast_info.market_cap is best-effort).
+_SPEEDBOAT_MIN_PRICE       = 12.0
+_SPEEDBOAT_MIN_AVG_DVOL_M  = 100.0   # million USD
+_SPEEDBOAT_MIN_CHG_PCT     = 4.0
+_SPEEDBOAT_MIN_ADR_PCT     = 4.0
+_SPEEDBOAT_MIN_MCAP_B      = 2.0     # billion USD
+
 
 def _fetch_speedboat_count_sync(
     tickers: list[str],
@@ -227,19 +241,19 @@ def _fetch_speedboat_count_sync(
     history_days: int = 10,
 ) -> tuple[int | None, list[dict[str, Any]]]:
     """
-    Count how many tickers in `tickers` are Up >4% on each of the last
-    `history_days` sessions. Returns (today_count, history_list).
-    Only counts stocks with price > $5 and volume > 100k on the measured session.
+    Elite Speedboat count: universe stocks that clear ALL institutional filters
+    (price >$12, avg daily dollar vol >$100M, change >4%, ADR% >4%, mktcap >$2B)
+    on each of the last `history_days` trading sessions.
     """
     if not tickers:
         return None, []
     try:
-        import pandas as pd  # local import
+        sample = tickers[:300]  # cap to keep Yahoo calls manageable
 
-        sample = tickers[:300]  # cap to avoid excessive Yahoo calls
+        # Need ~55 days to compute 30d avg-dvol and 20d ADR
         df = yf.download(
             tickers=sample,
-            period="60d",
+            period="90d",
             interval="1d",
             group_by="ticker",
             auto_adjust=True,
@@ -259,9 +273,22 @@ def _fetch_speedboat_count_sync(
             except Exception:
                 return None
 
+        # Market-cap pre-filter via yfinance fast_info (best-effort; skip on failure)
+        mcap_ok: set[str] = set()
+        for tkr in sample:
+            try:
+                mc = yf.Ticker(tkr).fast_info.get("market_cap") or 0
+                if mc >= _SPEEDBOAT_MIN_MCAP_B * 1e9:
+                    mcap_ok.add(tkr)
+            except Exception:
+                mcap_ok.add(tkr)  # don't exclude on error
+
         # Determine common trading dates
         try:
-            all_closes = df["Close"] if not is_single else df[["Close"]].rename(columns={"Close": sample[0]})
+            all_closes = (
+                df["Close"] if not is_single
+                else df[["Close"]].rename(columns={"Close": sample[0]})
+            )
         except Exception:
             return None, []
         all_closes = all_closes.dropna(how="all")
@@ -274,23 +301,56 @@ def _fetch_speedboat_count_sync(
         for dt in trading_dates:
             count = 0
             for tkr in sample:
+                if tkr not in mcap_ok:
+                    continue
                 closes_s = _col("Close", tkr)
                 volumes_s = _col("Volume", tkr)
-                if closes_s is None or volumes_s is None:
+                highs_s   = _col("High",  tkr)
+                lows_s    = _col("Low",   tkr)
+                if closes_s is None or volumes_s is None or highs_s is None or lows_s is None:
                     continue
-                closes_s = closes_s.loc[:dt]
+                closes_s  = closes_s.loc[:dt]
                 volumes_s = volumes_s.loc[:dt]
-                if len(closes_s) < 2:
+                highs_s   = highs_s.loc[:dt]
+                lows_s    = lows_s.loc[:dt]
+                if len(closes_s) < 32:  # need 30d for avg-dvol + prev close
                     continue
+
                 today_c = float(closes_s.iloc[-1])
-                prev_c = float(closes_s.iloc[-2])
-                today_v = float(volumes_s.iloc[-1]) if len(volumes_s) else 0
-                if prev_c <= 0:
+                prev_c  = float(closes_s.iloc[-2])
+                if prev_c <= 0 or today_c <= 0:
                     continue
+
+                # Price filter
+                if today_c <= _SPEEDBOAT_MIN_PRICE:
+                    continue
+
+                # Daily change filter
                 chg_pct = (today_c - prev_c) / prev_c * 100.0
-                if chg_pct > 4.0 and today_c > 5.0 and today_v > 100_000:
-                    count += 1
-            history.append({"date": str(dt.date()) if hasattr(dt, "date") else str(dt)[:10], "value": count})
+                if chg_pct <= _SPEEDBOAT_MIN_CHG_PCT:
+                    continue
+
+                # Avg daily dollar volume (last 30 sessions)
+                dvol_series = closes_s.iloc[-30:] * volumes_s.iloc[-30:]
+                avg_dvol = float(dvol_series.mean())
+                if avg_dvol < _SPEEDBOAT_MIN_AVG_DVOL_M * 1e6:
+                    continue
+
+                # ADR% — 20-day average of (High-Low)/Close
+                if len(highs_s) >= 20 and len(lows_s) >= 20:
+                    adr_series = (highs_s.iloc[-20:] - lows_s.iloc[-20:]) / closes_s.iloc[-20:] * 100.0
+                    adr_pct = float(adr_series.mean())
+                else:
+                    continue
+                if adr_pct <= _SPEEDBOAT_MIN_ADR_PCT:
+                    continue
+
+                count += 1
+
+            history.append({
+                "date": str(dt.date()) if hasattr(dt, "date") else str(dt)[:10],
+                "value": count,
+            })
 
         today_count = history[-1]["value"] if history else None
         return today_count, history
@@ -303,7 +363,7 @@ def compute_market_ocean_sync(*, history_days: int = 10) -> OceanSnapshot:
     """
     Full Market Ocean snapshot:
     - S5FI (% of S&P 500 proxy above 50SMA) with 10-day history
-    - Speedboat count (universe stocks up >4%, vol>100k, price>$5) with 10-day history
+    - Elite Speedboat count with institutional filters, with 10-day history
     """
     tickers = _load_universe_tickers()
     s5fi, s5fi_hist = _fetch_s5fi_sync(history_days=history_days)

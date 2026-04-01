@@ -2189,7 +2189,7 @@ export function ThemeDashboard() {
               }`}
             >
               <BarChart2 className="h-3.5 w-3.5" aria-hidden />
-              Market Breadth
+              Market Breath
             </button>
 
             <div className="relative ml-auto">

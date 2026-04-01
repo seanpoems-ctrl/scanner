@@ -259,7 +259,7 @@ const MarketBreadth = memo(function MarketBreadth() {
           </span>
           <div>
             <h2 className="text-sm font-semibold text-white">Market Ocean</h2>
-            <p className="text-[11px] text-slate-500">Breadth regime · S5FI proxy · Speedboats</p>
+            <p className="text-[11px] text-slate-500">Breath regime · S5FI proxy · Elite Speedboats</p>
           </div>
         </div>
         <div className="flex items-center gap-3">
@@ -343,7 +343,7 @@ const MarketBreadth = memo(function MarketBreadth() {
             <div className="flex items-center gap-2">
               <TrendingUp className="h-4 w-4 text-accent" aria-hidden />
               <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
-                Speedboats (Up &gt;4%)
+                Elite Speedboats (Up &gt;4%)
               </span>
             </div>
             {data?.speedboat_count != null && (
@@ -356,7 +356,7 @@ const MarketBreadth = memo(function MarketBreadth() {
             )}
           </div>
           <p className="mb-3 text-[10px] text-slate-600">
-            Universe stocks up &gt;4% · vol &gt;100k · price &gt;$5
+            Price &gt;$12 · Avg $Vol &gt;$100M · Change &gt;4% · ADR% &gt;4% · Mkt Cap &gt;$2B
           </p>
           {data?.speedboat_count != null && data.speedboat_count > 300 && (
             <div className="mb-3 rounded-lg border border-[#B3FF00]/30 bg-[#B3FF00]/10 px-3 py-2 text-[11px] font-semibold text-[#B3FF00]">
