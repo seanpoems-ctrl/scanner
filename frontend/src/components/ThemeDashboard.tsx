@@ -37,6 +37,7 @@ type ApiStock = {
 type ApiTheme = {
   theme: string;
   sector?: string;
+  thematicLabel?: string;
   relativeStrength1M: number | null;
   perf1D?: number | null;
   perf1W?: number | null;
@@ -1671,6 +1672,8 @@ const ScannerView = memo(function ScannerView({
   onRefreshIntel: (t: "pre" | "post") => void;
 }) {
   const [leaderboardMode, setLeaderboardMode] = useState<"themes" | "industry">("themes");
+  // drilldownLabel: when set (industry mode only), filter rows to this thematic bucket.
+  const [drilldownLabel, setDrilldownLabel] = useState<string | null>(null);
   const now_et_h = new Date().toLocaleString("en-US", { timeZone: "America/New_York", hour: "numeric", hour12: false });
   const [briefMode, setBriefMode] = useState<"pre" | "post">(Number(now_et_h) < 17 ? "pre" : "post");
   const [sortKey, setSortKey] = useState<
@@ -1695,10 +1698,19 @@ const ScannerView = memo(function ScannerView({
   const { payload: finvizLeaderboardPayload, loading: finvizLbLoading, error: finvizLbError } = useFdvLeaderboard(leaderboardMode);
   const finvizRows = finvizLeaderboardPayload?.themes ?? [];
   const finvizFilteredRows = useMemo(() => {
+    let rows = finvizRows;
+    // In industry mode, if a thematic drilldown is active, restrict to that bucket.
+    if (leaderboardMode === "industry" && drilldownLabel) {
+      rows = rows.filter((t) => (t.thematicLabel ?? "") === drilldownLabel);
+    }
     const q = themeQuery.trim().toLowerCase();
-    if (!q) return finvizRows;
-    return finvizRows.filter((t) => t.theme.toLowerCase().includes(q) || (t.sector ?? "").toLowerCase().includes(q));
-  }, [finvizRows, themeQuery]);
+    if (!q) return rows;
+    return rows.filter((t) =>
+      t.theme.toLowerCase().includes(q) ||
+      (t.sector ?? "").toLowerCase().includes(q) ||
+      (t.thematicLabel ?? "").toLowerCase().includes(q)
+    );
+  }, [finvizRows, themeQuery, leaderboardMode, drilldownLabel]);
   const sortedLeaderboardRows = useMemo(() => {
     if (!sortKey) return finvizFilteredRows;
     const dir = sortDir === "asc" ? 1 : -1;
@@ -1869,13 +1881,35 @@ const ScannerView = memo(function ScannerView({
           <header className="flex flex-wrap items-center justify-between gap-3 border-b border-terminal-border px-4 py-3">
             <div className="min-w-0">
               <h2 className="truncate text-sm font-semibold text-white">Leaderboard</h2>
-              <p className="truncate text-[11px] text-slate-500">Theme performance + RS</p>
+              {/* Breadcrumb: show when drilled into a thematic bucket */}
+              {leaderboardMode === "industry" && drilldownLabel ? (
+                <p className="flex items-center gap-1 truncate text-[11px] text-slate-500">
+                  <button
+                    type="button"
+                    onClick={() => setDrilldownLabel(null)}
+                    className="text-accent hover:underline"
+                  >
+                    Industry
+                  </button>
+                  <span className="text-slate-600">›</span>
+                  <span className="font-semibold text-slate-300">{drilldownLabel}</span>
+                  <span className="ml-1 rounded bg-terminal-elevated px-1 text-[9px] text-slate-500">
+                    {finvizFilteredRows.length} sub-industries
+                  </span>
+                </p>
+              ) : (
+                <p className="truncate text-[11px] text-slate-500">
+                  {leaderboardMode === "industry"
+                    ? "Click a row to drill into its thematic bucket"
+                    : "Theme performance + RS"}
+                </p>
+              )}
             </div>
             <div className="flex items-center gap-2">
               <div className="flex items-center gap-1 rounded-full border border-terminal-border bg-terminal-bg p-1">
                 <button
                   type="button"
-                  onClick={() => setLeaderboardMode("themes")}
+                  onClick={() => { setLeaderboardMode("themes"); setDrilldownLabel(null); }}
                   className={`rounded-full px-3 py-1.5 text-[11px] font-semibold transition-colors ${
                     leaderboardMode === "themes" ? "bg-accent/20 text-white" : "text-slate-400 hover:text-white"
                   }`}
@@ -1884,7 +1918,7 @@ const ScannerView = memo(function ScannerView({
                 </button>
                 <button
                   type="button"
-                  onClick={() => setLeaderboardMode("industry")}
+                  onClick={() => { setLeaderboardMode("industry"); setDrilldownLabel(null); }}
                   className={`rounded-full px-3 py-1.5 text-[11px] font-semibold transition-colors ${
                     leaderboardMode === "industry" ? "bg-accent/20 text-white" : "text-slate-400 hover:text-white"
                   }`}
@@ -1964,21 +1998,38 @@ const ScannerView = memo(function ScannerView({
                       const rankNumber = sortDir === "asc" ? displayedCount - idx : idx + 1;
                       const rs = t.relativeStrength1M ?? null;
                       const qRatio = Number.isFinite(t.relativeStrengthQualifierRatio) ? t.relativeStrengthQualifierRatio : null;
+                      // In industry mode (not drilled in): clicking drills into the thematic bucket.
+                      // When drilled in, or in themes mode: clicking spotlights the row.
+                      const canDrillDown =
+                        leaderboardMode === "industry" && !drilldownLabel && !!t.thematicLabel;
+                      const handleRowClick = () => {
+                        if (canDrillDown) {
+                          setDrilldownLabel(t.thematicLabel!);
+                        } else {
+                          setSpotlightThemeName(t.theme);
+                        }
+                      };
                       return (
                         <tr
                           key={`${leaderboardMode}:${t.theme}|${t.sector ?? ""}`}
                           className={`cursor-pointer border-b border-terminal-border/60 hover:bg-terminal-elevated/40 ${
                             spotlightTheme?.theme === t.theme ? "bg-terminal-elevated/30" : ""
                           }`}
-                          onClick={() => setSpotlightThemeName(t.theme)}
-                          title="Click to spotlight"
+                          onClick={handleRowClick}
+                          title={canDrillDown ? `Drill into ${t.thematicLabel}` : "Click to spotlight"}
                         >
                           <td className="px-3 py-2 text-right font-mono tabular-nums text-slate-500">{rankNumber}</td>
                           <td className="px-3 py-2">
                             <div className="min-w-0">
                               <p className="truncate font-medium text-slate-100">{t.theme}</p>
-                              <p className="truncate text-[10px] text-slate-600">
+                              <p className="flex flex-wrap items-center gap-x-1.5 truncate text-[10px] text-slate-600">
                                 {t.qualifiedCount}/{t.totalCount} · {t.sector ?? "—"} · {formatMoney(t.themeDollarVolume)}
+                                {/* Thematic bucket pill — only in industry mode */}
+                                {leaderboardMode === "industry" && t.thematicLabel && (
+                                  <span className="inline-block rounded bg-accent/10 px-1 py-px font-semibold text-accent/80">
+                                    {t.thematicLabel}
+                                  </span>
+                                )}
                               </p>
                             </div>
                           </td>

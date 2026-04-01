@@ -27,6 +27,7 @@ try:
         fetch_finviz_short_float_pct_batch,
         fetch_yfinance_short_percent_float_pct_batch,
         fetch_tradingview_tape,
+        get_industry_theme_map,
     )
     from backend.theme_universe import ThemeUniverseStore, scheduled_refresh_loop
     from backend.news_brief import (
@@ -49,6 +50,7 @@ except ModuleNotFoundError:
         fetch_finviz_short_float_pct_batch,
         fetch_yfinance_short_percent_float_pct_batch,
         fetch_tradingview_tape,
+        get_industry_theme_map,
     )
     from theme_universe import ThemeUniverseStore, scheduled_refresh_loop
     from news_brief import (
@@ -364,6 +366,12 @@ async def get_themes(view: str = "themes") -> dict:
         "last_error": _THEMES_META.get(key, {}).get("last_err"),
     }
     return out2
+
+
+@app.get("/api/themes/industry-map")
+async def get_industry_theme_map_endpoint() -> dict:
+    """Return the static INDUSTRY_THEME_MAP for frontend drill-down grouping."""
+    return {"map": get_industry_theme_map()}
 
 
 _INTEL_REFRESH_TASK: asyncio.Task[None] | None = None

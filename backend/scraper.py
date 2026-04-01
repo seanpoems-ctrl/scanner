@@ -65,7 +65,115 @@ FINVIZ_GROUPS_URL = (
 FINVIZ_SECTOR_ROTATION_URL = "https://finviz.com/groups.ashx?g=sector&v=110&o=-perf1d"
 # Industry groups (HTML tables); Performance tab adds multi-horizon %.
 FINVIZ_INDUSTRY_OVERVIEW_URL = f"{FINVIZ_BASE_URL}/groups.ashx?g=industry&v=110&o=name&st=d1"
-FINVIZ_INDUSTRY_PERF_URL = f"{FINVIZ_BASE_URL}/groups.ashx?g=industry&v=140&o=name&st=d1"
+# v=210 is the "Performance" view: adds YTD, 1Y, 3Y columns vs the lighter v=140.
+FINVIZ_INDUSTRY_PERF_URL = f"{FINVIZ_BASE_URL}/groups.ashx?g=industry&v=210&o=name&st=d1"
+
+# ---------------------------------------------------------------------------
+# Thematic label map  (Finviz industry name → "Elite Rubric" bucket)
+# Covers ~148 industries; unmapped names fall back to their parent sector.
+# ---------------------------------------------------------------------------
+INDUSTRY_THEME_MAP: dict[str, str] = {
+    # AI & Semiconductors
+    "Semiconductors": "AI & Semiconductors",
+    "Semiconductor Equipment & Materials": "AI & Semiconductors",
+    "Electronic Components": "AI & Semiconductors",
+    "Electronics & Computer Distribution": "AI & Semiconductors",
+    # AI & SaaS
+    "Software - Application": "AI & SaaS",
+    "Software - Infrastructure": "Cloud & Cyber",
+    "Information Technology Services": "AI & SaaS",
+    "Computer Hardware": "AI & SaaS",
+    # Cloud & Cyber
+    "Internet Content & Information": "Cloud & Cyber",
+    "Communication Equipment": "Cloud & Cyber",
+    "Security & Protection Services": "Cloud & Cyber",
+    # Biotech & Healthcare
+    "Biotechnology": "Biotech",
+    "Drug Manufacturers - General": "Biotech",
+    "Drug Manufacturers - Specialty & Generic": "Biotech",
+    "Medical Devices": "Medtech",
+    "Medical Instruments & Supplies": "Medtech",
+    "Diagnostics & Research": "Medtech",
+    "Health Information Services": "Medtech",
+    "Medical Care Facilities": "Healthcare Services",
+    "Hospitals": "Healthcare Services",
+    "Healthcare Plans": "Healthcare Services",
+    "Pharmaceutical Retailers": "Healthcare Services",
+    # Energy Transition
+    "Solar": "Energy Transition",
+    "Uranium": "Energy Transition",
+    "Oil & Gas E&P": "Energy — Oil & Gas",
+    "Oil & Gas Integrated": "Energy — Oil & Gas",
+    "Oil & Gas Midstream": "Energy — Oil & Gas",
+    "Oil & Gas Refining & Marketing": "Energy — Oil & Gas",
+    "Oil & Gas Equipment & Services": "Energy — Oil & Gas",
+    "Oil & Gas Drilling": "Energy — Oil & Gas",
+    "Coal": "Energy — Commodities",
+    "Other Industrial Metals & Mining": "Energy — Commodities",
+    "Copper": "Energy — Commodities",
+    "Gold": "Energy — Commodities",
+    "Silver": "Energy — Commodities",
+    "Aluminum": "Energy — Commodities",
+    "Steel": "Energy — Commodities",
+    "Thermal Coal": "Energy — Commodities",
+    # Defense & Aerospace
+    "Aerospace & Defense": "Defense & Aerospace",
+    "Air Defense": "Defense & Aerospace",
+    # Financials
+    "Asset Management": "Financials — Asset Management",
+    "Capital Markets": "Financials — Asset Management",
+    "Banks - Regional": "Financials — Banks",
+    "Banks - Diversified": "Financials — Banks",
+    "Credit Services": "Financials — FinTech",
+    "Insurance - Life": "Financials — Insurance",
+    "Insurance - Property & Casualty": "Financials — Insurance",
+    "Insurance - Diversified": "Financials — Insurance",
+    "Financial Data & Stock Exchanges": "Financials — FinTech",
+    "Mortgage Finance": "Financials — Real Estate",
+    "REIT - Residential": "Financials — Real Estate",
+    "REIT - Office": "Financials — Real Estate",
+    "REIT - Retail": "Financials — Real Estate",
+    "REIT - Industrial": "Financials — Real Estate",
+    "REIT - Specialty": "Financials — Real Estate",
+    "REIT - Healthcare Facilities": "Financials — Real Estate",
+    # Consumer
+    "Internet Retail": "Consumer — E-Commerce",
+    "Specialty Retail": "Consumer — Retail",
+    "Department Stores": "Consumer — Retail",
+    "Apparel Retail": "Consumer — Retail",
+    "Footwear & Accessories": "Consumer — Retail",
+    "Home Improvement Retail": "Consumer — Retail",
+    "Auto Manufacturers": "Consumer — Autos",
+    "Auto Parts": "Consumer — Autos",
+    "Auto Dealers": "Consumer — Autos",
+    "Restaurants": "Consumer — Discretionary",
+    "Leisure": "Consumer — Discretionary",
+    "Gambling": "Consumer — Discretionary",
+    "Travel Services": "Consumer — Discretionary",
+    "Hotels & Motels": "Consumer — Discretionary",
+    "Airlines": "Consumer — Travel",
+    "Airports & Air Services": "Consumer — Travel",
+    # Industrials
+    "Industrials": "Industrials",
+    "Specialty Industrial Machinery": "Industrials",
+    "Electrical Equipment & Parts": "Industrials",
+    "Tools & Accessories": "Industrials",
+    "Metal Fabrication": "Industrials",
+    "Farm & Heavy Construction Machinery": "Industrials",
+    "Staffing & Employment Services": "Industrials",
+    "Waste Management": "Industrials",
+    # Utilities
+    "Utilities - Regulated Electric": "Utilities",
+    "Utilities - Regulated Gas": "Utilities",
+    "Utilities - Renewable": "Energy Transition",
+    "Utilities - Diversified": "Utilities",
+    "Utilities - Independent Power Producers": "Utilities",
+}
+
+
+def get_industry_theme_map() -> dict[str, str]:
+    """Return the thematic label map (industry name → Elite Rubric bucket)."""
+    return dict(INDUSTRY_THEME_MAP)
 # Finviz Themes map: JSON performance per theme slug. `st` selects horizon (see `FINVIZ_MAP_PERF_ST`).
 FINVIZ_MAP_PERF_THEMES_BASE = f"{FINVIZ_BASE_URL}/api/map_perf.ashx?t=themes"
 # d1 session / 1D, w1 1W, w4 ~1M rolling, w13 ~3M, w26 ~6M (Finviz map API).
@@ -1165,20 +1273,22 @@ async def build_finviz_industry_leaderboard_rows() -> list[dict[str, Any]]:
         ch_pr = p.get("ch")
         perf1d = ch_pr if ch_pr is not None else ch_ov
         pm = p.get("pm")
-        themes.append(
-            _series_theme_dict(
-                theme=ov["name"],
-                sector="Industry",
-                rs1m=pm,
-                perf1d=perf1d,
-                perf1w=p.get("pw"),
-                perf1m=pm,
-                perf3m=p.get("pq"),
-                perf6m=p.get("ph"),
-                total_count=int(ov.get("stocks", 0)),
-                theme_dollar_volume=float(ov.get("themeDollarVolume", 0.0)),
-            )
+        raw_name = ov["name"]
+        thematic_label = INDUSTRY_THEME_MAP.get(raw_name, "")
+        row = _series_theme_dict(
+            theme=raw_name,
+            sector="Industry",
+            rs1m=pm,
+            perf1d=perf1d,
+            perf1w=p.get("pw"),
+            perf1m=pm,
+            perf3m=p.get("pq"),
+            perf6m=p.get("ph"),
+            total_count=int(ov.get("stocks", 0)),
+            theme_dollar_volume=float(ov.get("themeDollarVolume", 0.0)),
         )
+        row["thematicLabel"] = thematic_label
+        themes.append(row)
 
     themes.sort(
         key=lambda x: (
