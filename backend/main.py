@@ -533,39 +533,18 @@ async def get_market_ocean() -> dict:
       s5fi_history / speedboat_history - 10-day trend lists [{date, value}]
     Cached 20 min; thread-safe via _OCEAN_COMPUTE_LOCK inside compute_market_ocean_sync.
     """
-    # TEMP: hardcoded preview for UI verification of blast-off glow + rocket directive.
-    # s5fi=42 tests the yellow Caution zone; speedboat_count=142 fires the >125 blast-off.
-    # Remove this block once the visual is confirmed.
+    # TEMP: hardcoded preview — Deep Ocean (s5fi=65) + Elite Blast-off (count=145 >= 125).
+    # Remove this block once the blast-off glow and rocket directive are confirmed in the UI.
     _today = datetime.now(timezone.utc).date().isoformat()
+    _s5fi_vals  = [50, 52, 55, 58, 60, 62, 65]
+    _boat_vals  = [40, 50, 80, 110, 120, 130, 145]
     return {
-        "s5fi": 42.0,
-        "speedboat_count": 142,
+        "s5fi": 65.0,
+        "speedboat_count": 145,
         "is_blast_off": True,
         "blast_off_threshold": 125,
-        "s5fi_history": [
-            {"date": _today, "value": 42.0},
-            {"date": _today, "value": 38.5},
-            {"date": _today, "value": 45.1},
-            {"date": _today, "value": 31.2},
-            {"date": _today, "value": 55.7},
-            {"date": _today, "value": 62.3},
-            {"date": _today, "value": 28.9},
-            {"date": _today, "value": 18.4},
-            {"date": _today, "value": 47.6},
-            {"date": _today, "value": 42.0},
-        ],
-        "speedboat_history": [
-            {"date": _today, "value": 88},
-            {"date": _today, "value": 102},
-            {"date": _today, "value": 119},
-            {"date": _today, "value": 97},
-            {"date": _today, "value": 134},
-            {"date": _today, "value": 128},
-            {"date": _today, "value": 76},
-            {"date": _today, "value": 45},
-            {"date": _today, "value": 111},
-            {"date": _today, "value": 142},
-        ],
+        "s5fi_history":        [{"date": _today, "value": v} for v in _s5fi_vals],
+        "speedboat_history":   [{"date": _today, "value": v} for v in _boat_vals],
         "universe_size": 312,
         "fetched_at_utc": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
         "note": "TEMP ui-preview — remove after blast-off visual is confirmed",
