@@ -1,16 +1,21 @@
 import asyncio
 import hashlib
 import json
+import os
 import re
 from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import Any
 
 import httpx
-from fastapi import FastAPI, HTTPException, Query as FQuery
+from fastapi import FastAPI, HTTPException, Query as FQuery, Header
 from fastapi.middleware.cors import CORSMiddleware
 
 from time import monotonic
+
+# Secret token for the local-pusher → Render data push endpoint.
+# Set PUSH_SECRET env var on Render; the local pusher must send the same value.
+_PUSH_SECRET = os.environ.get("PUSH_SECRET", "").strip()
 
 from yfinance.exceptions import YFRateLimitError
 
@@ -406,6 +411,73 @@ async def debug_finviz_probe() -> dict:
                 results[key] = {"error": str(exc)}
     results["cache_meta"] = {k: dict(v) for k, v in _THEMES_META.items()}
     return results
+
+
+# ---------------------------------------------------------------------------
+# Local-pusher ingest endpoint
+# Your Windows machine runs backend/local_pusher.py on a schedule.  It scrapes
+# Finviz from your residential IP and POSTs the JSON payload here.  Render
+# stores it in _CACHE exactly as if it had scraped itself, bypassing the cloud
+# IP block completely.
+# ---------------------------------------------------------------------------
+@app.post("/api/push/leaderboard")
+async def push_leaderboard(
+    payload: dict,
+    x_push_secret: str | None = Header(default=None, alias="X-Push-Secret"),
+) -> dict:
+    """
+    Accept a leaderboard payload from the local Windows pusher.
+    Requires the X-Push-Secret header to match the PUSH_SECRET env var.
+    """
+    if not _PUSH_SECRET:
+        raise HTTPException(status_code=503, detail="PUSH_SECRET not configured on server.")
+    if x_push_secret != _PUSH_SECRET:
+        raise HTTPException(status_code=401, detail="Invalid push secret.")
+
+    view = str(payload.get("view", "")).strip().lower()
+    if view not in ("themes", "industry"):
+        raise HTTPException(status_code=400, detail="'view' must be 'themes' or 'industry'.")
+
+    themes = payload.get("themes")
+    if not isinstance(themes, list) or not themes:
+        raise HTTPException(status_code=400, detail="'themes' array is empty or missing.")
+
+    # Strip any seed-placeholder rows the pusher may have included.
+    themes = [t for t in themes if not t.get("seed")]
+    if not themes:
+        raise HTTPException(status_code=400, detail="All rows were seed placeholders — nothing to store.")
+
+    # Build a full payload (add VIX + tape stubs if pusher omitted them).
+    now = monotonic()
+    full_payload: dict[str, Any] = {
+        "themes": themes,
+        "vix": payload.get("vix") or {"symbol": "^VIX", "close": 0.0, "change_pct": 0.0},
+        "tape": payload.get("tape") or [],
+        "marketFlowSummary": payload.get("marketFlowSummary") or {
+            "aggregateDollarVolume": 0.0,
+            "previousAggregateDollarVolume": 0.0,
+            "aggregateAvg20DollarVolume": 0.0,
+            "flowTrend": "up",
+            "conviction": "low",
+        },
+        "leaderboardMeta": payload.get("leaderboardMeta") or {
+            "view": view,
+            "source": "local_pusher",
+        },
+        "pushed_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+    }
+
+    _CACHE[view] = (now, full_payload)
+    _THEMES_META[view]["last_ok_monotonic"] = now
+    _THEMES_META[view]["last_ok_utc"] = full_payload["pushed_at"]
+    _THEMES_META[view]["last_err"] = None
+    _THEMES_META[view]["refreshing"] = False
+
+    import logging as _log
+    _log.getLogger(__name__).info(
+        "push/leaderboard: stored %d %s rows from local pusher.", len(themes), view
+    )
+    return {"ok": True, "view": view, "rows_stored": len(themes), "pushed_at": full_payload["pushed_at"]}
 
 
 _INTEL_REFRESH_TASK: asyncio.Task[None] | None = None
