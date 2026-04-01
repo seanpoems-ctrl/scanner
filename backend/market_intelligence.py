@@ -30,8 +30,28 @@ from datetime import datetime, timezone
 from typing import Any
 
 import httpx
+import random
 import yfinance as yf
 from zoneinfo import ZoneInfo
+
+# ---------------------------------------------------------------------------
+# CONSTANTS
+# ---------------------------------------------------------------------------
+
+# Emergency fallback lessons — used by _heuristic_brief when the LLM is
+# unreachable, so the Analyst Lesson pillar is never blank.
+TRADER_LESSONS: list[str] = [
+    "Price is the only truth; news is just the catalyst.",
+    "In a high-volatility regime, survival is the first priority.",
+    "Respect the 200-day MA; it is the line between a correction and a bear market.",
+    "The best trades feel obvious in hindsight and uncomfortable in real time.",
+    "Volume confirms conviction; a breakout without volume is just noise.",
+    "Don't confuse a bounce with a trend — wait for the higher low.",
+    "The tape tells you what the crowd believes; your edge is in reading it faster.",
+    "Every great setup starts with a clean chart and a clear invalidation level.",
+    "Size kills more accounts than bad entries. Respect position sizing above all.",
+    "When VIX spikes above 30, reduce size first — ask questions later.",
+]
 
 try:
     from backend.scraper import fetch_series_snapshot
@@ -556,7 +576,7 @@ DAX {_pct(dax.get('change_pct'))} · FTSE {_pct(ftse.get('change_pct'))} · STOX
 - High conviction: only A+ setups with confirmed volume; no chasing extended names.
 
 **The Analyst Lesson:**
-> "The market will test your patience before it tests your thesis."
+> "{random.choice(TRADER_LESSONS)}"
 
 Tactical takeaway: In {vix_zone.split("(")[0].strip().lower()} conditions, reduce position size, demand confirmation, and preserve capital for when the edge is clear.
 
