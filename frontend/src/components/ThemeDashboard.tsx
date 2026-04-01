@@ -1252,11 +1252,17 @@ function renderBriefMarkdown(brief: IntelBrief, isModal: boolean = false): JSX.E
     }
 
     if (trimmed.startsWith("## ")) {
-      rendered.push(
-        <div key={i} className="mt-4 flex items-center gap-2 rounded-lg border border-accent/30 bg-terminal-elevated px-3 py-2">
-          <p className={`font-mono font-bold text-accent ${sz.genHeader}`}>{trimmed.slice(3)}</p>
-        </div>
-      );
+      // In the side panel the Gen timestamp is already shown in the card header —
+      // suppress the duplicate rounded box. In the modal it's useful as a section
+      // anchor so render it there only.
+      if (isModal) {
+        rendered.push(
+          <div key={i} className="mt-4 flex items-center gap-2 rounded-lg border border-accent/30 bg-terminal-elevated px-3 py-2">
+            <p className={`font-mono font-bold text-accent ${sz.genHeader}`}>{trimmed.slice(3)}</p>
+          </div>
+        );
+      }
+      // side panel: skip entirely — timestamp lives in the header row
     } else if (trimmed.startsWith("### ")) {
       rendered.push(
         <h3 key={i} className={`mt-4 border-b border-terminal-border/40 pb-1 font-semibold uppercase tracking-widest text-slate-400 ${sz.section}`}>
@@ -1277,7 +1283,11 @@ function renderBriefMarkdown(brief: IntelBrief, isModal: boolean = false): JSX.E
         </p>
       );
     } else if (trimmed === "---") {
-      rendered.push(<hr key={i} className="my-3 border-terminal-border/50" />);
+      // Skip the very first horizontal rule (it sits right after ## Gen header
+      // and creates a redundant top border before Pillar 1).
+      if (rendered.length > 0) {
+        rendered.push(<hr key={i} className="my-3 border-terminal-border/50" />);
+      }
     } else if (trimmed.startsWith("```") || trimmed === "") {
       // skip code fences and blank lines
     } else {
@@ -1353,22 +1363,30 @@ function IntelBriefCard({
   return (
     <>
       <section className="flex min-h-0 flex-col rounded-xl border border-terminal-border bg-terminal-card shadow-sm">
-        <header className="shrink-0 border-b border-terminal-border px-3 py-2">
-          <div className="flex items-center justify-between gap-2">
-            {/* Left: icon + title + gen timestamp */}
-            <div className="flex min-w-0 items-center gap-1.5">
+        <header className="shrink-0 border-b border-terminal-border px-3 py-1.5">
+          {/* Single horizontal line: icon · title · mode · gen-time | controls */}
+          <div className="flex items-center justify-between gap-x-3">
+            {/* ── Left: icon + title + mode label + gen timestamp ── */}
+            <div className="flex min-w-0 items-center gap-x-1.5 overflow-hidden">
               {mode === "pre"
                 ? <Sunrise className="h-3.5 w-3.5 shrink-0 text-amber-300" aria-hidden />
                 : <Moon className="h-3.5 w-3.5 shrink-0 text-sky-300" aria-hidden />}
-              <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+              <span className="shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
                 Market Intelligence
               </span>
+              <span className="shrink-0 text-[10px] text-slate-600">—</span>
+              <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+                {mode === "pre" ? "Pre-Market" : "Post-Market"}
+              </span>
               {brief?.gen_time_et && (
-                <span className="font-mono text-[9px] text-slate-600">· Gen {brief.gen_time_et}</span>
+                <span className="ml-2 shrink-0 font-mono text-[9px] text-slate-600">
+                  Gen {brief.gen_time_et}
+                </span>
               )}
             </div>
-            {/* Right: PRE/POST toggle + OPEN + refresh */}
-            <div className="flex shrink-0 items-center gap-1.5">
+
+            {/* ── Right: PRE/POST toggle · OPEN · refresh ── */}
+            <div className="flex shrink-0 items-center gap-x-1.5">
               <div className="flex items-center gap-1 rounded-full border border-terminal-border bg-terminal-bg p-0.5">
                 <button type="button" onClick={() => onModeChange("pre")}
                   className={`rounded-full px-2 py-0.5 text-[10px] font-semibold transition-colors ${mode === "pre" ? "bg-accent/20 text-white" : "text-slate-500 hover:text-white"}`}>
@@ -1379,12 +1397,12 @@ function IntelBriefCard({
                   POST
                 </button>
               </div>
-              {/* OPEN button — tight, w-fit, mono, terminal-style */}
+              {/* OPEN — visible border, hover fill */}
               <button
                 type="button"
                 disabled={!brief?.markdown}
                 onClick={() => setIsExpanded(true)}
-                className="w-fit rounded border border-slate-700 bg-transparent px-2 py-0.5 font-mono text-[9px] font-semibold text-slate-400 transition-colors hover:border-slate-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-30"
+                className="rounded border border-slate-500/60 bg-transparent px-2 py-0.5 font-mono text-[9px] font-semibold text-slate-400 transition-colors hover:border-slate-400 hover:bg-slate-800/50 hover:text-white disabled:cursor-not-allowed disabled:opacity-30"
               >
                 OPEN
               </button>
@@ -1396,7 +1414,7 @@ function IntelBriefCard({
             </div>
           </div>
           {autoMode !== mode && (
-            <p className="mt-1 text-[9px] text-slate-600">
+            <p className="mt-0.5 text-[9px] text-slate-600">
               Auto-display: {autoMode === "pre" ? "Pre-Market" : "Post-Market"} · switch above to compare
             </p>
           )}
