@@ -246,12 +246,34 @@ async def _gather_headlines(brief_type: str) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# Prompt builder — 7 Pillars + Catalyst JSON mandate
+# System instruction (the "Analyst Brain" — sent as systemInstruction to Gemini)
+# ---------------------------------------------------------------------------
+
+def _get_system_instruction() -> str:
+    return """You are an elite institutional equity analyst with 20+ years of experience across multiple market cycles.
+Your role is to produce a high-density, data-exact Market Intelligence Brief that a senior portfolio manager can act on immediately.
+
+ABSOLUTE RULES — violating any of these is unacceptable:
+1. ZERO PLACEHOLDERS: The strings "—", "N/A", "Calculating", "n/a", "()", or any blank cell are STRICTLY FORBIDDEN.
+   You must use the exact numeric data provided in the context. If data says NQ is 18,247 / +0.31%, write exactly that.
+2. FIDELITY: Every number you write must come verbatim from the LIVE MARKET DATA block — do not round, estimate, or invent figures.
+3. DENSITY: No fluff, no disclaimers, no conversational filler. Every word earns its place. Speak like a senior PM who has seen 10 bear markets.
+4. CATALYST JSON: Pillar 3 MUST be a fenced ```json_catalysts block (not ```json) containing a JSON array. Schema:
+   [{"catalyst": string, "event": string, "impact": string, "impact_level": "Extreme High"|"High"|"Medium"|"Low"}]
+   - Use exactly 3-5 items. impact_level must be one of those four exact strings.
+5. FORMATTING: Index levels use format "NQ 18,247 / +0.31%". No parentheses around changes. No em-dashes for values.
+6. TONE: Grounded, skeptical, high-conviction. Reference specific price levels. Name the dominant macro force.
+"""
+
+
+# ---------------------------------------------------------------------------
+# Prompt builder — 7 Pillars
 # ---------------------------------------------------------------------------
 
 def _build_prompt(brief_type: str, macro: dict[str, dict], headlines: list[dict]) -> str:
     now_et = datetime.now(NY_TZ)
     date_label = now_et.strftime("%A %B %d, %Y")
+    time_placeholder = now_et.strftime("%I:%M %p")  # will be replaced post-call with actual finish time
 
     nq    = macro.get("nasdaq_fut", {})
     es    = macro.get("spx_fut", {})
@@ -269,89 +291,87 @@ def _build_prompt(brief_type: str, macro: dict[str, dict], headlines: list[dict]
     hsi   = macro.get("hang_seng", {})
     ksp   = macro.get("kospi", {})
 
-    # Derive yield curve
     try:
         spread = float(us10y.get("close") or 0) - float(us2y.get("close") or 0)
         spread_str = f"{spread:+.2f}%"
+        curve_label = "inverted" if spread < 0 else ("flat" if abs(spread) < 0.15 else "normal")
     except Exception:
-        spread_str = "n/a"
+        spread_str = "0.00%"
+        curve_label = "normal"
 
-    hl_block = "\n".join(f"- {h['title']}" for h in headlines[:10]) or "No headlines available."
+    hl_block = "\n".join(f"- {h['title']}" for h in headlines[:10]) or "- No headlines available."
     brief_word = "Pre-Market" if brief_type == "pre" else "Post-Market"
 
-    return f"""You are a senior institutional equity analyst. Generate a {brief_word} Market Intelligence Brief.
+    return f"""DATE: {date_label}
+BRIEF TYPE: {brief_word}
 
-DATE: {date_label}
-
-===== LIVE MARKET DATA (DO NOT output "—" or empty values for these — use the exact numbers below) =====
-Nasdaq Futures (NQ):   {_price_line(nq.get('close'), nq.get('change_pct'))}
-S&P 500 Futures (ES):  {_price_line(es.get('close'), es.get('change_pct'))}
-Russell 2000 (RTY):    {_price_line(rty.get('close'), rty.get('change_pct'))}
-VIX:                   {_num(vix.get('close'))} ({_pct(vix.get('change_pct'))})
-US 10Y Yield:          {_num(us10y.get('close'))}%  ({_pct(us10y.get('change_pct'))})
-US 2Y Yield:           {_num(us2y.get('close'))}%  ({_pct(us2y.get('change_pct'))})
-Yield Curve (10Y-2Y):  {spread_str}
-DXY (Dollar Index):    {_num(dxy.get('close'))} ({_pct(dxy.get('change_pct'))})
-Gold (GC):             {_num(gold.get('close'))} ({_pct(gold.get('change_pct'))})
-WTI Crude (CL):        {_num(oil.get('close'))} ({_pct(oil.get('change_pct'))})
-DAX:                   {_pct(dax.get('change_pct'))}  |  FTSE 100: {_pct(ftse.get('change_pct'))}  |  EURO STOXX 50: {_pct(stoxx.get('change_pct'))}
-Nikkei 225:            {_pct(nkk.get('change_pct'))}  |  Hang Seng: {_pct(hsi.get('change_pct'))}  |  KOSPI: {_pct(ksp.get('change_pct'))}
-========================================================================================================
+===== LIVE MARKET DATA — USE THESE EXACT VALUES, NO MODIFICATIONS =====
+Nasdaq Futures (NQ):    {_price_line(nq.get('close'), nq.get('change_pct'))}
+S&P 500 Futures (ES):   {_price_line(es.get('close'), es.get('change_pct'))}
+Russell 2000 (RTY):     {_price_line(rty.get('close'), rty.get('change_pct'))}
+VIX:                    {_num(vix.get('close'))} | Change: {_pct(vix.get('change_pct'))}
+US 10Y Yield:           {_num(us10y.get('close'))}% | Change: {_pct(us10y.get('change_pct'))}
+US 2Y Yield:            {_num(us2y.get('close'))}% | Change: {_pct(us2y.get('change_pct'))}
+Yield Curve (10Y-2Y):   {spread_str} ({curve_label})
+DXY Dollar Index:       {_price_line(dxy.get('close'), dxy.get('change_pct'))}
+Gold (GC):              {_price_line(gold.get('close'), gold.get('change_pct'))}
+WTI Crude (CL):         {_price_line(oil.get('close'), oil.get('change_pct'))}
+--- EU ---
+DAX:        {_pct(dax.get('change_pct'))}
+FTSE 100:   {_pct(ftse.get('change_pct'))}
+STOXX 50:   {_pct(stoxx.get('change_pct'))}
+--- ASIA ---
+Nikkei 225: {_pct(nkk.get('change_pct'))}
+Hang Seng:  {_pct(hsi.get('change_pct'))}
+KOSPI:      {_pct(ksp.get('change_pct'))}
+=======================================================================
 
 TODAY'S HEADLINES:
 {hl_block}
 
-===== STRICT OUTPUT RULES =====
-1. FORBIDDEN: Never output "—", "N/A", "()", or blank cells anywhere. Use the data provided above.
-2. The ## Gen header must use EXACTLY "## Gen [TIME] ET" where [TIME] is the actual current generation time.
-3. Pillar 3 (Catalysts) MUST be output as a fenced JSON block using this exact schema — NO markdown table:
-```json
-[
-  {{"catalyst": "string", "event": "string", "impact": "string", "impact_level": "High|Medium|Low"}},
-  ...3-5 items total...
-]
-```
-4. Tone: grounded, skeptical, senior PM. No generic disclaimers. Every sentence earns its place.
-5. Use (Price / Change) format for index levels, e.g. "NQ 19,847 / +0.42%"
+===== REQUIRED OUTPUT — COPY THIS STRUCTURE EXACTLY =====
 
-===== OUTPUT STRUCTURE =====
-
-## Gen {now_et.strftime("%I:%M %p")} ET
+## Gen {time_placeholder} ET
 
 ### 1. US Market Mood
-2-3 sentences. Reference NQ and ES prices and changes. State the primary sentiment driver.
+[2-3 sentences. Must include NQ and ES values from data above. State the primary sentiment driver and directional bias.]
 
 ### 2. Global Synchronization
-EU and Asian coupling assessment. Format: "DAX [change] · FTSE [change] · STOXX [change]". Call out divergence if EU and Asia disagree.
+[Format: "DAX [pct] · FTSE [pct] · STOXX [pct] | Nikkei [pct] · Hang Seng [pct] · KOSPI [pct]"]
+[One sentence: Are risk assets globally aligned or diverging? Name the strongest and weakest region.]
 
 ### 3. Economic Data & Catalysts
-Output ONLY the JSON block (no table, no extra text outside the block):
-```json
-[{{"catalyst": "...", "event": "...", "impact": "...", "impact_level": "High|Medium|Low"}}]
+```json_catalysts
+[
+  {{"catalyst": "...", "event": "...", "impact": "...", "impact_level": "Extreme High"}},
+  {{"catalyst": "...", "event": "...", "impact": "...", "impact_level": "High"}},
+  {{"catalyst": "...", "event": "...", "impact": "...", "impact_level": "Medium"}},
+  {{"catalyst": "...", "event": "...", "impact": "...", "impact_level": "Low"}}
+]
 ```
 
 ### 4. Volatility & Risk Gauges
-- VIX [exact level]: [zone — Green <15 | Yellow 15-25 | Red 25-35 | Extreme >35]
-- Yield curve [spread]: [steepening/flattening/inverted] — implication
-- **Risk Status: [color zone]** — one-line justification
+- VIX [exact value from data]: [Green Zone <15 | Yellow Zone 15-25 | Red Zone 25-35 | Extreme Zone >35] — one implication sentence
+- Yield curve {spread_str}: [{curve_label}] — one sentence on what this means for credit conditions
+- **Risk Status: [color]** — [one-line justification using VIX level and curve shape]
 
 ### 5. Market Breadth
-- S5FI estimate: [range]% — [Internal Health: Broad/Narrow/Mixed]
-- One sentence on whether the move is confirmed by breadth or suspect
+- S5FI estimate: [range based on index performance context]% — Internal Health: [Broad/Narrow/Mixed]
+- [One sentence: does the breadth confirm or contradict the index move?]
 
 ### 6. Fixed Income & Yields
-- 10Y at [yield]%: [headwind/tailwind for growth stocks, with specific threshold]
-- Curve [steepening/flattening]: [30-day implication in one sentence]
+- 10Y at {_num(us10y.get('close'))}%: [headwind above X% threshold / tailwind below — specify the threshold]
+- Curve ({spread_str}): [steepening/flattening implication for sector rotation in next 30 days]
 
 ### 7. Actionable Technicals & The Analyst Lesson
 **Technicals:**
-- Key SPX level: [specific price — 200d MA, pivot, support/resistance]
-- High-conviction setup: [sector or pattern to watch today]
+- Key SPX level: [specific price with context — 200d MA, recent pivot, key support/resistance]
+- High-conviction setup: [specific sector rotation or pattern active today]
 
 **The Analyst Lesson:**
-> [One non-generic, memorable trading observation — quote style]
+> [One non-generic, cycle-aware trading observation — must be specific to today's data]
 
-Tactical takeaway: [One specific, data-driven action sentence for today]
+Tactical takeaway: [One data-driven action: what to do, under what condition, with what sizing discipline]
 
 ---
 """
@@ -365,27 +385,31 @@ async def _call_gemini(prompt: str, *, attempts: int = 3) -> str | None:
     if not _GEMINI_API_KEY:
         log.warning("GEMINI_API_KEY not set; using heuristic brief fallback.")
         return None
+    system_instruction = _get_system_instruction()
     body = {
-        "contents": [{"parts": [{"text": prompt}]}],
+        "systemInstruction": {"parts": [{"text": system_instruction}]},
+        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
         "generationConfig": {
-            "temperature": 0.65,
-            "maxOutputTokens": 2000,
+            "temperature": 0.6,
+            "maxOutputTokens": 2200,
             "topP": 0.92,
         },
     }
     url = f"{_GEMINI_URL}?key={_GEMINI_API_KEY}"
     for attempt in range(1, attempts + 1):
         try:
-            async with httpx.AsyncClient(timeout=45.0) as client:
+            async with httpx.AsyncClient(timeout=50.0) as client:
                 r = await client.post(url, json=body)
                 r.raise_for_status()
                 data = r.json()
                 text = data["candidates"][0]["content"]["parts"][0]["text"]
-                return text.strip()
+                if text.strip():
+                    return text.strip()
+                log.warning("Gemini attempt %d/%d returned empty text", attempt, attempts)
         except Exception as exc:
             log.warning("Gemini attempt %d/%d failed: %s", attempt, attempts, exc)
-            if attempt < attempts:
-                await asyncio.sleep(4 * attempt)
+        if attempt < attempts:
+            await asyncio.sleep(4 * attempt)
     return None
 
 
@@ -393,14 +417,22 @@ async def _call_gemini(prompt: str, *, attempts: int = 3) -> str | None:
 # Catalyst JSON extractor
 # ---------------------------------------------------------------------------
 
+_VALID_IMPACT_LEVELS = {"Extreme High", "High", "Medium", "Low"}
+
+
 def _extract_catalysts(markdown: str) -> list[dict]:
     """
-    Parse the ```json [...] ``` block in Pillar 3 into a list of catalyst dicts.
-    Returns [] if parsing fails (frontend falls back to plain text rendering).
+    Parse the ```json_catalysts [...] ``` block in Pillar 3 into catalyst dicts.
+    Tries multiple fence patterns for robustness.
+    Returns [] if parsing fails — frontend falls back to plain text rendering.
     """
-    m = re.search(r"```json\s*(\[.*?\])\s*```", markdown, re.DOTALL)
+    # Primary: our custom fence label
+    m = re.search(r"```json_catalysts\s*(\[.*?\])\s*```", markdown, re.DOTALL)
     if not m:
-        # Try relaxed: bare JSON array between ### 3 and ### 4
+        # Fallback 1: standard ```json fence
+        m = re.search(r"```json\s*(\[.*?\])\s*```", markdown, re.DOTALL)
+    if not m:
+        # Fallback 2: bare JSON array between Pillar 3 and Pillar 4 headers
         m = re.search(r"###\s*3\..*?(\[.*?\]).*?###\s*4", markdown, re.DOTALL)
     if not m:
         return []
@@ -412,11 +444,23 @@ def _extract_catalysts(markdown: str) -> list[dict]:
         for item in raw:
             if not isinstance(item, dict):
                 continue
+            level = str(item.get("impact_level") or "Medium").strip()
+            if level not in _VALID_IMPACT_LEVELS:
+                # normalise legacy values
+                level_lower = level.lower()
+                if "extreme" in level_lower:
+                    level = "Extreme High"
+                elif "high" in level_lower:
+                    level = "High"
+                elif "low" in level_lower:
+                    level = "Low"
+                else:
+                    level = "Medium"
             out.append({
                 "catalyst":     str(item.get("catalyst") or "").strip(),
                 "event":        str(item.get("event") or "").strip(),
                 "impact":       str(item.get("impact") or "").strip(),
-                "impact_level": str(item.get("impact_level") or "Medium").strip(),
+                "impact_level": level,
             })
         return out
     except Exception:
@@ -437,6 +481,8 @@ def _heuristic_brief(brief_type: str, macro: dict[str, dict], headlines: list[di
     nkk   = macro.get("nikkei", {})
     hsi   = macro.get("hang_seng", {})
     ftse  = macro.get("ftse", {})
+    stoxx = macro.get("stoxx50", {})
+    ksp   = macro.get("kospi", {})
 
     try:
         vix_n = float(vix.get("close") or 0)
@@ -459,27 +505,35 @@ def _heuristic_brief(brief_type: str, macro: dict[str, dict], headlines: list[di
 
     brief_word = "Pre-Market" if brief_type == "pre" else "Post-Market"
 
-    # Catalyst JSON block
+    # Catalyst JSON block — use 4-tier impact levels
+    impact_levels = ["Extreme High", "High", "Medium", "Low"]
     catalyst_rows = []
-    for h in headlines[:4]:
+    for i, h in enumerate(headlines[:4]):
         catalyst_rows.append({
-            "catalyst": "Headline",
-            "event": h["title"][:60],
-            "impact": "Monitor for directional shift at open",
-            "impact_level": "Medium",
+            "catalyst": "Market Headline",
+            "event": h["title"][:70],
+            "impact": "Monitor for directional confirmation at session open",
+            "impact_level": impact_levels[min(i, len(impact_levels) - 1)],
         })
+    if not catalyst_rows:
+        catalyst_rows = [{
+            "catalyst": "Session Open",
+            "event": f"{brief_word} session — no headlines fetched",
+            "impact": "Follow price action; tape is the primary signal",
+            "impact_level": "Medium",
+        }]
     catalyst_json = json.dumps(catalyst_rows, indent=2)
 
     return f"""## Gen {time_label}
 
 ### 1. US Market Mood
-{brief_word} session. Nasdaq futures at {_num(nq.get('close'))} ({_pct(nq.get('change_pct'))}), S&P 500 at {_num(es.get('close'))} ({_pct(es.get('change_pct'))}). Price action is the primary signal; follow the tape and not the narrative.
+{brief_word} session. NQ {_price_line(nq.get('close'), nq.get('change_pct'))} · ES {_price_line(es.get('close'), es.get('change_pct'))}. Price action is the primary signal; follow the tape and not the narrative.
 
 ### 2. Global Synchronization
-DAX {_pct(dax.get('change_pct'))} · FTSE {_pct(ftse.get('change_pct'))} · Nikkei {_pct(nkk.get('change_pct'))} · Hang Seng {_pct(hsi.get('change_pct'))}. Assess whether risk assets are aligned or diverging — divergence is a warning sign.
+DAX {_pct(dax.get('change_pct'))} · FTSE {_pct(ftse.get('change_pct'))} · STOXX {_pct(stoxx.get('change_pct'))} | Nikkei {_pct(nkk.get('change_pct'))} · Hang Seng {_pct(hsi.get('change_pct'))} · KOSPI {_pct(ksp.get('change_pct'))}. Assess alignment before adding cross-asset exposure.
 
 ### 3. Economic Data & Catalysts
-```json
+```json_catalysts
 {catalyst_json}
 ```
 
@@ -489,12 +543,12 @@ DAX {_pct(dax.get('change_pct'))} · FTSE {_pct(ftse.get('change_pct'))} · Nikk
 - **Risk Status: {vix_zone}** — size positions accordingly.
 
 ### 5. Market Breadth
-- S5FI estimate: context-dependent on index context — Internal Health: verify participation.
-- A rising tape on narrow breadth is a caution signal; demand broad confirmation before adding size.
+- S5FI estimate: context-dependent on index context — Internal Health: verify broad participation before adding size.
+- A rising tape on narrow breadth is a caution signal; demand confirmation from advancing issues.
 
 ### 6. Fixed Income & Yields
-- US 10Y at {_num(us10y.get('close'))}%: growth stocks face headwinds above 4.5%.
-- Yield curve {curve_str}: watch for steepening as a risk-on signal for cyclicals.
+- US 10Y at {_num(us10y.get('close'))}%: growth stocks face headwinds above 4.50%; {_num(us10y.get('close'))}% is the current rate regime signal.
+- Yield curve {curve_str}: watch for steepening as a risk-on signal for cyclicals over growth.
 
 ### 7. Actionable Technicals & The Analyst Lesson
 **Technicals:**
@@ -504,7 +558,7 @@ DAX {_pct(dax.get('change_pct'))} · FTSE {_pct(ftse.get('change_pct'))} · Nikk
 **The Analyst Lesson:**
 > "The market will test your patience before it tests your thesis."
 
-Tactical takeaway: In {vix_zone.split('(')[0].strip().lower()} conditions, reduce position size, demand confirmation, and preserve capital for high-conviction A+ setups.
+Tactical takeaway: In {vix_zone.split("(")[0].strip().lower()} conditions, reduce position size, demand confirmation, and preserve capital for when the edge is clear.
 
 ---
 """
@@ -539,8 +593,13 @@ async def generate_intelligence_brief(brief_type: str) -> dict[str, Any]:
     if not markdown:
         markdown = _heuristic_brief(brief_type, macro, headlines, time_label)
 
-    # Replace the placeholder time in ## Gen header with the actual finish time
-    markdown = re.sub(r"^## Gen .+? ET", f"## Gen {time_label}", markdown, count=1, flags=re.MULTILINE)
+    # Replace the placeholder time in ## Gen header with the actual post-call finish time.
+    # Regex matches: ## Gen 08:03 AM ET  OR  ## Gen 8:03 AM ET  OR  ## Gen 08:03 ET
+    markdown = re.sub(
+        r"^## Gen\s+\d{1,2}:\d{2}(?:\s*[AP]M)?\s*ET",
+        f"## Gen {time_label}",
+        markdown, count=1, flags=re.MULTILINE
+    )
 
     catalysts = _extract_catalysts(markdown)
 

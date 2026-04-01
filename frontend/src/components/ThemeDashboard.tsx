@@ -1083,14 +1083,19 @@ function useIntelBrief() {
 // ── Catalyst impact badge ──────────────────────────────────────────────────
 function ImpactBadge({ level }: { level: string }) {
   const lv = (level || "").toLowerCase();
-  const color =
-    lv === "high"
-      ? "bg-red-900/40 text-red-300 border-red-700/40"
+  // 4-tier: Extreme High | High | Medium | Low
+  const styles =
+    lv.includes("extreme")
+      ? "text-rose-500 font-black border-rose-700/50 bg-rose-950/40"
+      : lv === "high"
+      ? "text-orange-400 font-bold border-orange-700/40 bg-orange-950/30"
       : lv === "low"
-      ? "bg-emerald-900/30 text-emerald-400 border-emerald-700/30"
-      : "bg-amber-900/30 text-amber-300 border-amber-700/30";
+      ? "text-emerald-400 font-semibold border-emerald-700/30 bg-emerald-950/20"
+      : "text-amber-200 font-semibold border-amber-700/30 bg-amber-950/20"; // Medium
   return (
-    <span className={`inline-block rounded border px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide ${color}`}>
+    <span
+      className={`inline-block rounded border px-1.5 py-0.5 text-[9px] uppercase tracking-widest ${styles}`}
+    >
       {level || "Medium"}
     </span>
   );
@@ -1100,23 +1105,34 @@ function ImpactBadge({ level }: { level: string }) {
 function CatalystTable({ rows }: { rows: CatalystRow[] }) {
   if (!rows || rows.length === 0) return null;
   return (
-    <div className="my-2 overflow-x-auto rounded-lg border border-terminal-border">
-      <table className="w-full text-[10px]">
+    <div className="my-2 overflow-x-auto rounded-lg border border-slate-800/80">
+      <table className="w-full text-[11px]">
         <thead>
-          <tr className="border-b border-terminal-border bg-terminal-elevated/80">
-            <th className="px-2 py-1.5 text-left text-[9px] font-semibold uppercase tracking-wider text-slate-500">Catalyst</th>
-            <th className="px-2 py-1.5 text-left text-[9px] font-semibold uppercase tracking-wider text-slate-500">Data / Event</th>
-            <th className="px-2 py-1.5 text-left text-[9px] font-semibold uppercase tracking-wider text-slate-500">Market Impact</th>
-            <th className="px-2 py-1.5 text-left text-[9px] font-semibold uppercase tracking-wider text-slate-500">Level</th>
+          <tr className="border-b border-slate-800/60 bg-slate-900/40">
+            <th className="px-4 py-2 text-left text-[10px] font-semibold uppercase tracking-widest text-slate-500">
+              Catalyst
+            </th>
+            <th className="px-4 py-2 text-left text-[10px] font-semibold uppercase tracking-widest text-slate-500">
+              Data / Event
+            </th>
+            <th className="px-4 py-2 text-left text-[10px] font-semibold uppercase tracking-widest text-slate-500">
+              Market Impact
+            </th>
+            <th className="px-4 py-2 text-left text-[10px] font-semibold uppercase tracking-widest text-slate-500">
+              Level
+            </th>
           </tr>
         </thead>
         <tbody>
           {rows.map((row, ri) => (
-            <tr key={ri} className="border-b border-slate-800/50 transition-colors hover:bg-terminal-elevated/40">
-              <td className="px-2 py-2 font-medium text-slate-200">{row.catalyst}</td>
-              <td className="px-2 py-2 text-slate-300">{row.event}</td>
-              <td className="px-2 py-2 text-slate-400">{row.impact}</td>
-              <td className="px-2 py-2">
+            <tr
+              key={ri}
+              className="border-b border-slate-800/60 transition-colors hover:bg-slate-800/10"
+            >
+              <td className="px-4 py-3 font-semibold text-slate-100">{row.catalyst}</td>
+              <td className="px-4 py-3 text-slate-300">{row.event}</td>
+              <td className="px-4 py-3 text-slate-400">{row.impact}</td>
+              <td className="px-4 py-3">
                 <ImpactBadge level={row.impact_level} />
               </td>
             </tr>
@@ -1139,8 +1155,115 @@ function InlineBold({ text }: { text: string }) {
   );
 }
 
-// ── Main panel ─────────────────────────────────────────────────────────────
+// ── Markdown renderer (shared between side panel and focus modal) ──────────
+function renderBriefMarkdown(brief: IntelBrief): JSX.Element[] {
+  // Replace both ```json_catalysts and ```json fences containing the catalyst
+  // array with a sentinel so CatalystTable can be injected at that position.
+  const cleanedMarkdown = brief.markdown!
+    .replace(/```json_catalysts[\s\S]*?```/g, "___CATALYST_TABLE___")
+    .replace(/```json\s*\[[\s\S]*?\]\s*```/g, "___CATALYST_TABLE___");
+
+  const lines = cleanedMarkdown.split("\n");
+  const rendered: JSX.Element[] = [];
+  let tableBuffer: string[] = [];
+  let inMdTable = false;
+
+  const flushMarkdownTable = () => {
+    if (!tableBuffer.length) return;
+    const rows = tableBuffer.filter((l) => l.trim().startsWith("|"));
+    if (rows.length >= 2) {
+      const headers = rows[0].split("|").filter(Boolean).map((c) => c.trim());
+      const bodyRows = rows.slice(2);
+      rendered.push(
+        <div key={`tbl-${rendered.length}`} className="my-2 overflow-x-auto rounded-lg border border-slate-800/60">
+          <table className="w-full text-[10px]">
+            <thead>
+              <tr className="border-b border-slate-800/60 bg-slate-900/40">
+                {headers.map((h) => (
+                  <th key={h} className="px-4 py-2 text-left text-[9px] font-semibold uppercase tracking-widest text-slate-500">{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {bodyRows.map((row, ri) => {
+                const cells = row.split("|").filter(Boolean).map((c) => c.trim());
+                return (
+                  <tr key={ri} className="border-b border-slate-800/50 hover:bg-slate-800/10">
+                    {cells.map((c, ci) => (
+                      <td key={ci} className="px-4 py-2.5 text-slate-300"><InlineBold text={c} /></td>
+                    ))}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      );
+    }
+    tableBuffer = [];
+    inMdTable = false;
+  };
+
+  lines.forEach((line, i) => {
+    const trimmed = line.trim();
+
+    if (trimmed.startsWith("|")) {
+      inMdTable = true;
+      tableBuffer.push(trimmed);
+      return;
+    }
+    if (inMdTable) flushMarkdownTable();
+
+    if (trimmed === "___CATALYST_TABLE___") {
+      rendered.push(<CatalystTable key={`cat-${i}`} rows={brief.catalysts ?? []} />);
+      return;
+    }
+
+    if (trimmed.startsWith("## ")) {
+      rendered.push(
+        <div key={i} className="mt-4 flex items-center gap-2 rounded-lg border border-accent/30 bg-terminal-elevated px-3 py-2">
+          <p className="font-mono text-[11px] font-bold text-accent">{trimmed.slice(3)}</p>
+        </div>
+      );
+    } else if (trimmed.startsWith("### ")) {
+      rendered.push(
+        <h3 key={i} className="mt-4 border-b border-terminal-border/40 pb-1 text-[10px] font-semibold uppercase tracking-widest text-slate-400">
+          {trimmed.slice(4)}
+        </h3>
+      );
+    } else if (trimmed.startsWith("> ")) {
+      rendered.push(
+        <blockquote key={i} className="my-2 rounded-r border-l-2 border-accent/60 bg-terminal-elevated/50 py-2 pl-3 pr-2 italic text-[11px] text-slate-200">
+          <InlineBold text={trimmed.slice(2)} />
+        </blockquote>
+      );
+    } else if (trimmed.startsWith("- ") || trimmed.startsWith("* ")) {
+      rendered.push(
+        <p key={i} className="flex gap-2 text-[11px] leading-relaxed text-slate-300">
+          <span className="mt-0.5 shrink-0 text-slate-600">•</span>
+          <span><InlineBold text={trimmed.slice(2)} /></span>
+        </p>
+      );
+    } else if (trimmed === "---") {
+      rendered.push(<hr key={i} className="my-3 border-terminal-border/50" />);
+    } else if (trimmed.startsWith("```") || trimmed === "") {
+      // skip code fences and blank lines
+    } else {
+      rendered.push(
+        <p key={i} className="text-[11px] leading-relaxed text-slate-300">
+          <InlineBold text={trimmed} />
+        </p>
+      );
+    }
+  });
+  if (inMdTable) flushMarkdownTable();
+  return rendered;
+}
+
+// ── Main panel (side drawer) + Focus Modal ─────────────────────────────────
 function IntelBriefPanel({ brief, loading }: { brief: IntelBrief | null; loading: boolean }) {
+  const [isExpanded, setIsExpanded] = useState(false);
+
   if (loading) {
     return (
       <div className="flex flex-col gap-2 p-3">
@@ -1159,108 +1282,62 @@ function IntelBriefPanel({ brief, loading }: { brief: IntelBrief | null; loading
     );
   }
 
-  // Strip the ```json...``` catalyst block from markdown before line rendering
-  // (it is rendered as a proper table via brief.catalysts instead)
-  const cleanedMarkdown = brief.markdown.replace(/```json[\s\S]*?```/g, "___CATALYST_TABLE___");
+  const rendered = renderBriefMarkdown(brief);
 
-  const lines = cleanedMarkdown.split("\n");
-  const rendered: JSX.Element[] = [];
-  let tableBuffer: string[] = [];
-  let inTable = false;
+  return (
+    <>
+      {/* Side-panel: compact view with expand button */}
+      <article className="space-y-1 p-3">
+        {rendered}
+        <button
+          type="button"
+          onClick={() => setIsExpanded(true)}
+          className="mt-3 w-full rounded-lg border border-terminal-border/60 bg-terminal-elevated py-1.5 text-[10px] font-semibold uppercase tracking-widest text-slate-500 transition-colors hover:border-accent/40 hover:text-white"
+        >
+          ↗ Open Full Brief
+        </button>
+      </article>
 
-  const flushMarkdownTable = () => {
-    if (!tableBuffer.length) return;
-    const rows = tableBuffer.filter((l) => l.trim().startsWith("|"));
-    if (rows.length >= 2) {
-      const headers = rows[0].split("|").filter(Boolean).map((c) => c.trim());
-      const bodyRows = rows.slice(2);
-      rendered.push(
-        <div key={`tbl-${rendered.length}`} className="my-2 overflow-x-auto rounded-lg border border-terminal-border">
-          <table className="w-full text-[10px]">
-            <thead>
-              <tr className="border-b border-terminal-border bg-terminal-elevated">
-                {headers.map((h) => (
-                  <th key={h} className="px-2 py-1.5 text-left text-[9px] font-semibold uppercase tracking-wider text-slate-500">{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {bodyRows.map((row, ri) => {
-                const cells = row.split("|").filter(Boolean).map((c) => c.trim());
-                return (
-                  <tr key={ri} className="border-b border-slate-800/50">
-                    {cells.map((c, ci) => (
-                      <td key={ci} className="px-2 py-1.5 text-slate-300"><InlineBold text={c} /></td>
-                    ))}
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+      {/* Focus Modal: full-width centered overlay */}
+      {isExpanded && (
+        <div
+          className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/80 backdrop-blur-sm"
+          onClick={(e) => { if (e.target === e.currentTarget) setIsExpanded(false); }}
+        >
+          <div className="relative mx-auto my-8 w-full max-w-3xl rounded-2xl border border-terminal-border bg-terminal-card shadow-2xl">
+            {/* Modal header */}
+            <div className="sticky top-0 z-10 flex items-center justify-between rounded-t-2xl border-b border-terminal-border bg-terminal-card px-5 py-3">
+              <div className="flex items-center gap-2">
+                {brief.brief_type === "pre"
+                  ? <Sunrise className="h-4 w-4 text-amber-300" aria-hidden />
+                  : <Moon className="h-4 w-4 text-sky-300" aria-hidden />}
+                <span className="text-[12px] font-bold uppercase tracking-widest text-white">
+                  Market Intelligence — {brief.brief_type === "pre" ? "Pre-Market" : "Post-Market"}
+                </span>
+                {brief.gen_time_et && (
+                  <span className="ml-2 font-mono text-[10px] text-accent">
+                    Gen {brief.gen_time_et}
+                  </span>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsExpanded(false)}
+                className="rounded-full p-1 text-slate-500 hover:bg-terminal-elevated hover:text-white"
+                aria-label="Close"
+              >
+                ✕
+              </button>
+            </div>
+            {/* Modal body */}
+            <article className="space-y-1.5 px-5 py-4">
+              {rendered}
+            </article>
+          </div>
         </div>
-      );
-    }
-    tableBuffer = [];
-    inTable = false;
-  };
-
-  lines.forEach((line, i) => {
-    const trimmed = line.trim();
-
-    if (trimmed.startsWith("|")) {
-      inTable = true;
-      tableBuffer.push(trimmed);
-      return;
-    }
-    if (inTable) flushMarkdownTable();
-
-    if (trimmed === "___CATALYST_TABLE___") {
-      rendered.push(
-        <CatalystTable key={`cat-${i}`} rows={brief.catalysts ?? []} />
-      );
-      return;
-    }
-
-    if (trimmed.startsWith("## ")) {
-      rendered.push(
-        <div key={i} className="mt-3 flex items-center gap-2 rounded-lg border border-accent/30 bg-terminal-elevated px-2.5 py-2">
-          <p className="font-mono text-[11px] font-bold text-accent">{trimmed.slice(3)}</p>
-        </div>
-      );
-    } else if (trimmed.startsWith("### ")) {
-      rendered.push(
-        <h3 key={i} className="mt-3 border-b border-terminal-border/40 pb-0.5 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
-          {trimmed.slice(4)}
-        </h3>
-      );
-    } else if (trimmed.startsWith("> ")) {
-      rendered.push(
-        <blockquote key={i} className="my-1.5 rounded-r border-l-2 border-accent/60 bg-terminal-elevated/50 pl-2.5 py-1 italic text-[11px] text-slate-300">
-          <InlineBold text={trimmed.slice(2)} />
-        </blockquote>
-      );
-    } else if (trimmed.startsWith("- ") || trimmed.startsWith("* ")) {
-      rendered.push(
-        <p key={i} className="flex gap-1.5 text-[11px] text-slate-300">
-          <span className="mt-0.5 shrink-0 text-slate-600">•</span>
-          <span><InlineBold text={trimmed.slice(2)} /></span>
-        </p>
-      );
-    } else if (trimmed === "---") {
-      rendered.push(<hr key={i} className="my-2 border-terminal-border/60" />);
-    } else if (trimmed.startsWith("```") || trimmed === "") {
-      // skip fences and blanks silently
-    } else {
-      rendered.push(
-        <p key={i} className="text-[11px] leading-relaxed text-slate-300">
-          <InlineBold text={trimmed} />
-        </p>
-      );
-    }
-  });
-  if (inTable) flushMarkdownTable();
-
-  return <article className="space-y-1 p-3">{rendered}</article>;
+      )}
+    </>
+  );
 }
 
 // ── Updated MarketBriefCard using Intelligence Brief (no Generate button) ─────
