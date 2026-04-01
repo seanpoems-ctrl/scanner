@@ -167,7 +167,7 @@ function S5FiGauge({ value }: { value: number | null }) {
             <circle cx={cx} cy={cy} r={5} fill={color} />
           </>
         )}
-        <text x={cx} y={cy + 18} textAnchor="middle" fill="white" fontSize={22} fontWeight={700} fontFamily="monospace">
+        <text x={cx} y={cy + 32} textAnchor="middle" fill="white" fontSize={22} fontWeight={700} fontFamily="monospace">
           {value !== null ? `${pct.toFixed(1)}%` : "—"}
         </text>
         <text x={arcStart.x - 4} y={arcStart.y + 14} textAnchor="end" fill="#64748b" fontSize={8}>0%</text>
