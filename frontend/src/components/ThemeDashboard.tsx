@@ -1,4 +1,4 @@
-import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type JSX } from "react";
 import { AlertTriangle, BarChart2, Info, LayoutGrid, Moon, Plus, Search, Sunrise } from "lucide-react";
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import MarketBreadth from "./MarketBreadth";
@@ -299,20 +299,6 @@ function formatEtClock(ms: number | null | undefined): string {
   }
 }
 
-function formatEtGeneratedShort(iso?: string | null): string {
-  if (!iso) return "Gen —";
-  try {
-    const d = new Date(iso);
-    const now = new Date();
-    const dayKey = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" });
-    const sameDay = dayKey.format(d) === dayKey.format(now);
-    const time = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit" }).format(d);
-    const date = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", month: "short", day: "2-digit" }).format(d);
-    return `Gen ${sameDay ? time : `${date} ${time}`} ET`;
-  } catch {
-    return `Gen ${iso}`;
-  }
-}
 
 function numOr0(s: string): number {
   const x = parseFloat(String(s).replace(/,/g, ""));
@@ -1023,6 +1009,253 @@ function BreakingRiskBanner({
   );
 }
 
+// ── Intelligence Brief hook (7-Pillar Gemini-powered) ─────────────────────────
+
+type IntelBrief = {
+  brief_type: "pre" | "post";
+  generated_at_utc: string | null;
+  gen_time_et: string | null;
+  markdown: string | null;
+  headlines: { title: string; link: string; pubDate: string }[];
+  macro_snapshot: Record<string, { close: number | null; change_pct: number | null }>;
+};
+
+function useIntelBrief() {
+  const [pre, setPre] = useState<IntelBrief | null>(null);
+  const [post, setPost] = useState<IntelBrief | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const fetchBoth = useCallback(async () => {
+    try {
+      const [rPre, rPost] = await Promise.all([
+        fetch(`${API_BASE_URL}/api/intelligence-brief/pre`),
+        fetch(`${API_BASE_URL}/api/intelligence-brief/post`),
+      ]);
+      if (rPre.ok) setPre((await rPre.json()) as IntelBrief);
+      if (rPost.ok) setPost((await rPost.json()) as IntelBrief);
+    } catch {
+      // silent — briefs are best-effort
+    }
+  }, []);
+
+  useEffect(() => {
+    void fetchBoth();
+    const id = window.setInterval(() => void fetchBoth(), 5 * 60_000); // poll every 5 min
+    return () => window.clearInterval(id);
+  }, [fetchBoth]);
+
+  const refresh = useCallback(async (briefType: "pre" | "post") => {
+    setLoading(true);
+    try {
+      await fetch(`${API_BASE_URL}/api/intelligence-brief/${briefType}/refresh`, { method: "POST" });
+      // Poll for completion — brief generates in ~5-15s
+      for (let i = 0; i < 12; i++) {
+        await new Promise((r) => window.setTimeout(r, 5000));
+        const r = await fetch(`${API_BASE_URL}/api/intelligence-brief/${briefType}`);
+        if (r.ok) {
+          const data = (await r.json()) as IntelBrief;
+          if (data.markdown) {
+            briefType === "pre" ? setPre(data) : setPost(data);
+            break;
+          }
+        }
+      }
+    } catch {
+      // silent
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  return { pre, post, loading, refresh };
+}
+
+// ── Intelligence Brief panel (auto-displaying, no Generate button) ─────────────
+
+function IntelBriefPanel({ brief, loading }: { brief: IntelBrief | null; loading: boolean }) {
+  if (loading) {
+    return (
+      <div className="flex flex-col gap-2 p-3">
+        <div className="h-3 w-3/4 animate-pulse rounded bg-terminal-border" />
+        <div className="h-3 w-full animate-pulse rounded bg-terminal-border" />
+        <div className="h-3 w-5/6 animate-pulse rounded bg-terminal-border" />
+        <p className="mt-2 text-[10px] text-slate-600">Generating intelligence brief…</p>
+      </div>
+    );
+  }
+  if (!brief?.markdown) {
+    return (
+      <p className="p-3 text-[11px] text-slate-600">
+        Brief scheduled for next market session. Will appear automatically at 8:03 AM ET (pre) or 4:55 PM ET (post).
+      </p>
+    );
+  }
+
+  // Render markdown: headers, bold, tables, blockquotes, bullets
+  const lines = brief.markdown.split("\n");
+  const rendered: JSX.Element[] = [];
+  let tableBuffer: string[] = [];
+  let inTable = false;
+
+  const flushTable = () => {
+    if (!tableBuffer.length) return;
+    const rows = tableBuffer.filter((l) => l.trim().startsWith("|"));
+    if (rows.length < 2) {
+      tableBuffer.forEach((l, i) => rendered.push(<p key={`tr-${i}`} className="text-[11px] text-slate-400">{l}</p>));
+    } else {
+      const headers = rows[0].split("|").filter(Boolean).map((c) => c.trim());
+      const bodyRows = rows.slice(2);
+      rendered.push(
+        <div key={`tbl-${rendered.length}`} className="my-2 overflow-x-auto rounded-lg border border-terminal-border">
+          <table className="w-full text-[10px]">
+            <thead>
+              <tr className="border-b border-terminal-border bg-terminal-elevated">
+                {headers.map((h) => (
+                  <th key={h} className="px-2 py-1.5 text-left font-semibold text-slate-300">{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {bodyRows.map((row, ri) => {
+                const cells = row.split("|").filter(Boolean).map((c) => c.trim());
+                return (
+                  <tr key={ri} className="border-b border-terminal-border/40">
+                    {cells.map((c, ci) => (
+                      <td key={ci} className="px-2 py-1.5 text-slate-300">{c}</td>
+                    ))}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      );
+    }
+    tableBuffer = [];
+    inTable = false;
+  };
+
+  lines.forEach((line, i) => {
+    const trimmed = line.trim();
+
+    if (trimmed.startsWith("|")) {
+      inTable = true;
+      tableBuffer.push(trimmed);
+      return;
+    }
+    if (inTable) flushTable();
+
+    if (trimmed.startsWith("## ")) {
+      rendered.push(
+        <div key={i} className="mt-3 flex items-center gap-2 rounded-lg border border-terminal-border/60 bg-terminal-elevated px-2.5 py-2">
+          <p className="font-mono text-[11px] font-bold text-accent">{trimmed.slice(3)}</p>
+        </div>
+      );
+    } else if (trimmed.startsWith("### ")) {
+      rendered.push(
+        <h3 key={i} className="mt-2 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+          {trimmed.slice(4)}
+        </h3>
+      );
+    } else if (trimmed.startsWith("> ")) {
+      rendered.push(
+        <blockquote key={i} className="my-1 border-l-2 border-accent/50 pl-2.5 italic text-[11px] text-slate-400">
+          {trimmed.slice(2)}
+        </blockquote>
+      );
+    } else if (trimmed.startsWith("- ") || trimmed.startsWith("* ")) {
+      const content = trimmed.slice(2);
+      const parts = content.split(/\*\*(.+?)\*\*/g);
+      rendered.push(
+        <p key={i} className="flex gap-1.5 text-[11px] text-slate-300">
+          <span className="mt-0.5 shrink-0 text-slate-600">•</span>
+          <span>
+            {parts.map((p, pi) => pi % 2 === 1 ? <strong key={pi} className="text-white">{p}</strong> : p)}
+          </span>
+        </p>
+      );
+    } else if (trimmed === "" || trimmed === "---") {
+      if (trimmed === "---") rendered.push(<hr key={i} className="my-2 border-terminal-border" />);
+    } else if (trimmed) {
+      const parts = trimmed.split(/\*\*(.+?)\*\*/g);
+      rendered.push(
+        <p key={i} className="text-[11px] leading-relaxed text-slate-300">
+          {parts.map((p, pi) => pi % 2 === 1 ? <strong key={pi} className="text-white">{p}</strong> : p)}
+        </p>
+      );
+    }
+  });
+  if (inTable) flushTable();
+
+  return <article className="space-y-1 p-3">{rendered}</article>;
+}
+
+// ── Updated MarketBriefCard using Intelligence Brief (no Generate button) ─────
+
+function IntelBriefCard({
+  mode,
+  onModeChange,
+  pre,
+  post,
+  loading,
+  onRefresh,
+}: {
+  mode: "pre" | "post";
+  onModeChange: (m: "pre" | "post") => void;
+  pre: IntelBrief | null;
+  post: IntelBrief | null;
+  loading: boolean;
+  onRefresh: (t: "pre" | "post") => void;
+}) {
+  const brief = mode === "pre" ? pre : post;
+  const now_et_h = new Date().toLocaleString("en-US", { timeZone: "America/New_York", hour: "numeric", hour12: false });
+  // Auto-select: pre-market until 16:54, post-market from 16:55 ET
+  const autoMode: "pre" | "post" = Number(now_et_h) < 17 ? "pre" : "post";
+
+  return (
+    <section className="flex min-h-0 flex-col rounded-xl border border-terminal-border bg-terminal-card shadow-sm">
+      <header className="shrink-0 border-b border-terminal-border px-3 py-2 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-1.5">
+            {mode === "pre"
+              ? <Sunrise className="h-3.5 w-3.5 text-amber-300" aria-hidden />
+              : <Moon className="h-3.5 w-3.5 text-sky-300" aria-hidden />}
+            <span>Market Intelligence</span>
+            {brief?.gen_time_et && (
+              <span className="ml-1 font-mono text-[9px] text-slate-600">Gen {brief.gen_time_et}</span>
+            )}
+          </div>
+          <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-1 rounded-full border border-terminal-border bg-terminal-bg p-0.5">
+              <button type="button" onClick={() => onModeChange("pre")}
+                className={`rounded-full px-2 py-0.5 text-[10px] font-semibold transition-colors ${mode === "pre" ? "bg-accent/20 text-white" : "text-slate-500 hover:text-white"}`}>
+                PRE
+              </button>
+              <button type="button" onClick={() => onModeChange("post")}
+                className={`rounded-full px-2 py-0.5 text-[10px] font-semibold transition-colors ${mode === "post" ? "bg-accent/20 text-white" : "text-slate-500 hover:text-white"}`}>
+                POST
+              </button>
+            </div>
+            <button type="button" disabled={loading} title="Regenerate brief"
+              onClick={() => onRefresh(mode)}
+              className="rounded-md border border-terminal-border bg-terminal-bg px-2 py-0.5 text-[9px] font-semibold text-slate-500 hover:border-accent/30 hover:text-white disabled:opacity-40">
+              {loading ? "…" : "↺"}
+            </button>
+          </div>
+        </div>
+        {autoMode !== mode && (
+          <p className="mt-1 text-[9px] text-slate-600">
+            Auto-display: {autoMode === "pre" ? "Pre-Market" : "Post-Market"} · switch above to compare
+          </p>
+        )}
+      </header>
+      <div className="fintech-scroll min-h-0 flex-1 overflow-y-auto">
+        <IntelBriefPanel brief={brief} loading={loading} />
+      </div>
+    </section>
+  );
+}
+
 function usePremarketBrief() {
   const [brief, setBrief] = useState<PremarketBrief | null>(null);
   const [loading, setLoading] = useState(false);
@@ -1212,27 +1445,24 @@ const ScannerView = memo(function ScannerView({
   setSpotlightThemeName,
   themeQuery,
   setThemeQuery,
-  preBrief,
-  preBriefLoading,
-  onGeneratePreBrief,
-  postBrief,
-  postBriefLoading,
-  onGeneratePostBrief,
+  intelPre,
+  intelPost,
+  intelLoading,
+  onRefreshIntel,
 }: {
   payload: ApiPayload;
   spotlightThemeName: string | null;
   setSpotlightThemeName: (s: string) => void;
   themeQuery: string;
   setThemeQuery: (s: string) => void;
-  preBrief: PremarketBrief | null;
-  preBriefLoading: boolean;
-  onGeneratePreBrief: () => void;
-  postBrief: PremarketBrief | null;
-  postBriefLoading: boolean;
-  onGeneratePostBrief: () => void;
+  intelPre: IntelBrief | null;
+  intelPost: IntelBrief | null;
+  intelLoading: boolean;
+  onRefreshIntel: (t: "pre" | "post") => void;
 }) {
   const [leaderboardMode, setLeaderboardMode] = useState<"themes" | "industry">("themes");
-  const [briefMode, setBriefMode] = useState<"pre" | "post">("pre");
+  const now_et_h = new Date().toLocaleString("en-US", { timeZone: "America/New_York", hour: "numeric", hour12: false });
+  const [briefMode, setBriefMode] = useState<"pre" | "post">(Number(now_et_h) < 17 ? "pre" : "post");
   const [sortKey, setSortKey] = useState<
     "theme" | "perf1D" | "perf1W" | "perf1M" | "perf3M" | "perf6M" | "rs1m" | "qual" | "leaders" | null
   >(null);
@@ -1325,15 +1555,13 @@ const ScannerView = memo(function ScannerView({
       {/* Left: Market + Brief + VIX */}
       <div className="fintech-scroll flex w-[360px] min-w-[360px] shrink-0 flex-col gap-3 overflow-y-auto pr-1">
         <MarketRegimeCard state={payload.market_momentum_score?.state} message={payload.market_momentum_score?.message} />
-        <MarketBriefCard
+        <IntelBriefCard
           mode={briefMode}
           onModeChange={setBriefMode}
-          pre={preBrief}
-          preLoading={preBriefLoading}
-          onGeneratePre={onGeneratePreBrief}
-          post={postBrief}
-          postLoading={postBriefLoading}
-          onGeneratePost={onGeneratePostBrief}
+          pre={intelPre}
+          post={intelPost}
+          loading={intelLoading}
+          onRefresh={onRefreshIntel}
         />
         <VixFearGaugeLite close={payload.vix?.close} changePct={payload.vix?.change_pct} />
         <LiquidityFlowCard summary={payload.marketFlowSummary} />
@@ -1574,106 +1802,7 @@ const ScannerView = memo(function ScannerView({
   );
 });
 
-function MarketBriefCard({
-  mode,
-  pre,
-  preLoading,
-  onGeneratePre,
-  post,
-  postLoading,
-  onGeneratePost,
-  onModeChange,
-}: {
-  mode: "pre" | "post";
-  onModeChange: (m: "pre" | "post") => void;
-  pre: PremarketBrief | null;
-  preLoading: boolean;
-  onGeneratePre: () => void;
-  post: PremarketBrief | null;
-  postLoading: boolean;
-  onGeneratePost: () => void;
-}) {
-  const brief = mode === "pre" ? pre : post;
-  const loading = mode === "pre" ? preLoading : postLoading;
-  const onGenerate = mode === "pre" ? onGeneratePre : onGeneratePost;
-  return (
-    <section className="flex min-h-0 flex-col rounded-xl border border-terminal-border bg-terminal-card shadow-sm">
-        <header className="shrink-0 border-b border-terminal-border px-3 py-2 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
-        <div className="flex items-center justify-between gap-2">
-          <span>{mode === "pre" ? "Pre-market brief" : "Post-market brief"}</span>
-          <div className="flex items-center gap-1 rounded-full border border-terminal-border bg-terminal-bg p-1">
-            <button
-              type="button"
-              onClick={() => onModeChange("pre")}
-              className={`rounded-full px-2.5 py-1 text-[10px] font-semibold transition-colors ${
-                mode === "pre" ? "bg-accent/20 text-white" : "text-slate-400 hover:text-white"
-              }`}
-            >
-              PRE
-            </button>
-            <button
-              type="button"
-              onClick={() => onModeChange("post")}
-              className={`rounded-full px-2.5 py-1 text-[10px] font-semibold transition-colors ${
-                mode === "post" ? "bg-accent/20 text-white" : "text-slate-400 hover:text-white"
-              }`}
-            >
-              POST
-            </button>
-          </div>
-        </div>
-        </header>
-        <div className="fintech-scroll min-h-0 flex-1 overflow-y-auto p-3">
-          {loading ? (
-            <p className="text-xs text-slate-500">Generating brief in background…</p>
-          ) : brief?.narrative?.length || brief?.sections?.length ? (
-            <article className="space-y-2 text-[12px] leading-snug text-slate-300">
-              <header className="flex items-center justify-between gap-3 rounded-lg border border-terminal-border bg-terminal-bg/50 px-2.5 py-2">
-                <div className="flex min-w-0 flex-1 items-center justify-between gap-3">
-                  <p className="flex min-w-0 items-center gap-1.5 truncate text-[11px] font-semibold uppercase tracking-wider text-slate-300">
-                    {mode === "pre" ? (
-                      <Sunrise className="h-4 w-4 shrink-0 text-amber-300" aria-hidden />
-                    ) : (
-                      <Moon className="h-4 w-4 shrink-0 text-sky-200" aria-hidden />
-                    )}
-                    <span className="truncate">{mode === "pre" ? "Pre Market Brief" : "Post Market Brief"}</span>
-                  </p>
-                  <p className="shrink-0 font-mono text-[10px] text-slate-500">{formatEtGeneratedShort(brief.generated_at_utc)}</p>
-                </div>
-              </header>
-              {(brief.narrative ?? []).map((p, i) => (
-                <p key={i} className="text-slate-300">
-                  {p}
-                </p>
-              ))}
-              {(brief.sections ?? []).map((sec) => (
-                <section key={sec.title} className="space-y-1">
-                  <h3 className="text-[10px] font-semibold uppercase tracking-wider text-slate-600">{sec.title}</h3>
-                  {sec.bullets.map((b, j) => (
-                    <p key={`${sec.title}-${j}`} className="text-slate-300">
-                      {b}
-                    </p>
-                  ))}
-                </section>
-              ))}
-            </article>
-          ) : (
-            <p className="text-xs text-slate-500">No {mode === "pre" ? "pre" : "post"}-market brief yet.</p>
-          )}
-        </div>
-        <div className="shrink-0 border-t border-terminal-border px-3 py-2">
-          <button
-            type="button"
-            disabled={loading}
-            className="w-full rounded-md border border-terminal-border bg-terminal-bg px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400 transition-colors hover:border-accent/40 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
-            onClick={onGenerate}
-          >
-            {loading ? "Generating…" : "Generate now"}
-          </button>
-        </div>
-    </section>
-  );
-}
+// MarketBriefCard removed — superseded by IntelBriefCard (7-Pillar Gemini engine).
 
 const GappersView = memo(function GappersView({
   gappers,
@@ -2022,8 +2151,10 @@ export function ThemeDashboard() {
   const [focusTicker, setFocusTicker] = useState<string | null>(null);
   const [focusTickerMeta, setFocusTickerMeta] = useState<TickerDrawerMeta | null>(null);
   const { payload, error, reload: reloadThemes, lastUpdatedAt, loading, loadingSince, pollMs } = useThemesPayload();
-  const { brief: preBrief, loading: preBriefLoading, refresh: refreshPreBrief } = usePremarketBrief();
-  const { brief: postBrief, loading: postBriefLoading, refresh: refreshPostBrief } = usePostmarketBrief();
+  // Legacy RSS-based briefs kept alive for data continuity (not rendered in main UI).
+  usePremarketBrief();
+  usePostmarketBrief();
+  const { pre: intelPre, post: intelPost, loading: intelBriefLoading, refresh: refreshIntel } = useIntelBrief();
 
   const [etNow, setEtNow] = useState(() => Date.now());
 
@@ -2322,12 +2453,10 @@ export function ThemeDashboard() {
                     setSpotlightThemeName={(s) => setSpotlightThemeName(s)}
                     themeQuery={leaderboardQuery}
                     setThemeQuery={setLeaderboardQuery}
-                    preBrief={preBrief}
-                    preBriefLoading={preBriefLoading}
-                    onGeneratePreBrief={refreshPreBrief}
-                    postBrief={postBrief}
-                    postBriefLoading={postBriefLoading}
-                    onGeneratePostBrief={refreshPostBrief}
+                    intelPre={intelPre}
+                    intelPost={intelPost}
+                    intelLoading={intelBriefLoading}
+                    onRefreshIntel={refreshIntel}
                   />
                 ) : (
                   <div className="flex h-full items-center justify-center text-slate-500">Loading scanner…</div>

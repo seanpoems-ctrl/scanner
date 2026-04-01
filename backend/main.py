@@ -17,6 +17,8 @@ from yfinance.exceptions import YFRateLimitError
 try:
     # Local package-style imports (used in local dev from repo root).
     from backend.breadth import compute_market_ocean_sync, OceanSnapshot
+    from backend.market_intelligence import generate_and_save as intel_generate_and_save, load_brief as intel_load_brief
+    from backend.market_scheduler import start_scheduler, stop_scheduler
     from backend.premarket_tv import PremarketTvParams, run_premarket_tv_scan_sync
     from backend.scraper import (
         build_theme_leaderboard,
@@ -58,6 +60,8 @@ except ModuleNotFoundError:
         generate_postmarket_brief,
     )
     from breadth import compute_market_ocean_sync, OceanSnapshot
+    from market_intelligence import generate_and_save as intel_generate_and_save, load_brief as intel_load_brief
+    from market_scheduler import start_scheduler, stop_scheduler
     from market_time import is_nyse_trading_day_et, market_status_dict
     from earnings import EarningsCache, next_earnings_for_tickers
 
@@ -362,6 +366,9 @@ async def get_themes(view: str = "themes") -> dict:
     return out2
 
 
+_INTEL_REFRESH_TASK: asyncio.Task[None] | None = None
+
+
 @app.on_event("startup")
 async def _startup() -> None:
     global _UNIVERSE_TASK, _PRE_NEWS_TASK, _POST_NEWS_TASK, _THEMES_TASK
@@ -371,11 +378,14 @@ async def _startup() -> None:
     _PRE_NEWS_TASK = asyncio.create_task(scheduled_premarket_loop(_PRE_NEWS_STORE))
     _POST_NEWS_TASK = asyncio.create_task(scheduled_postmarket_loop(_POST_NEWS_STORE))
     _THEMES_TASK = asyncio.create_task(_themes_refresh_loop())
+    # Start the APScheduler cron for Intelligence briefs (08:03 / 16:55 ET Mon-Fri).
+    start_scheduler()
 
 
 @app.on_event("shutdown")
 async def _shutdown() -> None:
     global _UNIVERSE_TASK, _PRE_NEWS_TASK, _POST_NEWS_TASK, _THEMES_TASK
+    stop_scheduler()
     if _UNIVERSE_TASK is not None:
         _UNIVERSE_TASK.cancel()
         _UNIVERSE_TASK = None
@@ -451,6 +461,53 @@ async def refresh_postmarket_brief() -> dict:
 async def get_market_status() -> dict:
     """Lightweight market calendar status (ET-based)."""
     return market_status_dict()
+
+
+# ---------------------------------------------------------------------------
+# Intelligence Brief endpoints  (/api/intelligence-brief)
+# ---------------------------------------------------------------------------
+
+@app.get("/api/intelligence-brief/{brief_type}")
+async def get_intelligence_brief(brief_type: str) -> dict:
+    """
+    Return the latest cached Intelligence Brief for brief_type = 'pre' | 'post'.
+    Returns an empty skeleton if no brief has been generated yet today.
+    """
+    if brief_type not in ("pre", "post"):
+        raise HTTPException(status_code=400, detail="brief_type must be 'pre' or 'post'")
+    cached = await intel_load_brief(brief_type)
+    if cached:
+        return cached
+    return {
+        "brief_type": brief_type,
+        "generated_at_utc": None,
+        "gen_time_et": None,
+        "markdown": None,
+        "headlines": [],
+        "macro_snapshot": {},
+    }
+
+
+@app.post("/api/intelligence-brief/{brief_type}/refresh")
+async def refresh_intelligence_brief(brief_type: str) -> dict:
+    """
+    Manually trigger a fresh Intelligence Brief generation in the background.
+    Returns the currently cached version (or empty skeleton) immediately.
+    """
+    if brief_type not in ("pre", "post"):
+        raise HTTPException(status_code=400, detail="brief_type must be 'pre' or 'post'")
+    global _INTEL_REFRESH_TASK
+    if _INTEL_REFRESH_TASK is None or _INTEL_REFRESH_TASK.done():
+        async def _run() -> None:
+            await intel_generate_and_save(brief_type)
+        _INTEL_REFRESH_TASK = asyncio.create_task(_run())
+    cached = await intel_load_brief(brief_type)
+    return {
+        "status": "refreshing",
+        "brief_type": brief_type,
+        "generated_at_utc": (cached or {}).get("generated_at_utc"),
+        "gen_time_et": (cached or {}).get("gen_time_et"),
+    }
 
 
 @app.get("/api/scanner/premarket-gappers")
