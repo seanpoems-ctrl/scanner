@@ -1086,12 +1086,12 @@ function ImpactBadge({ level }: { level: string }) {
   // 4-tier: Extreme High | High | Medium | Low
   const styles =
     lv.includes("extreme")
-      ? "text-rose-500 font-black border-rose-700/50 bg-rose-950/40"
+      ? "text-rose-500 font-black border-rose-500/50 bg-rose-500/10"
       : lv === "high"
-      ? "text-orange-400 font-bold border-orange-700/40 bg-orange-950/30"
+      ? "text-orange-400 font-bold border-orange-400/50 bg-orange-400/10"
       : lv === "low"
-      ? "text-emerald-400 font-semibold border-emerald-700/30 bg-emerald-950/20"
-      : "text-amber-200 font-semibold border-amber-700/30 bg-amber-950/20"; // Medium
+      ? "text-emerald-400 font-semibold border-emerald-400/50 bg-emerald-400/10"
+      : "text-amber-200 font-semibold border-amber-200/50 bg-amber-200/10"; // Medium
   return (
     <span
       className={`inline-block rounded border px-1.5 py-0.5 text-[9px] uppercase tracking-widest ${styles}`}
@@ -1301,7 +1301,7 @@ function IntelBriefPanel({ brief, loading }: { brief: IntelBrief | null; loading
       {/* Focus Modal: full-width centered overlay */}
       {isExpanded && (
         <div
-          className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/80 backdrop-blur-sm"
+          className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/80 backdrop-blur-xl"
           onClick={(e) => { if (e.target === e.currentTarget) setIsExpanded(false); }}
         >
           <div className="relative mx-auto my-8 w-full max-w-3xl rounded-2xl border border-terminal-border bg-terminal-card shadow-2xl">
