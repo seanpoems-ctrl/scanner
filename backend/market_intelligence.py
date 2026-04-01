@@ -98,8 +98,14 @@ _TICKER_ALIASES: dict[str, list[str]] = {
     "mmth":        ["CBOE:MMTH", "SP:MMTH", "yf:^MMTH"],
 }
 
-# Last-known-good cache: {key -> {"close": float, "change_pct": float}}
+# Live-session fallback cache: {key -> {"close": float, "change_pct": float}}
+# Updated on every successful fetch; used as emergency fallback when APIs fail.
 _MACRO_CACHE: dict[str, dict] = {}
+
+# Previous-session close snapshot: captured at the START of each fetch run,
+# before _MACRO_CACHE is overwritten with fresh data.
+# This is the "yesterday" baseline that powers velocity narratives.
+_PREV_CLOSE_CACHE: dict[str, float] = {}
 
 
 def _snapshot_ok(d: dict) -> bool:
@@ -163,7 +169,18 @@ async def _fetch_one(key: str) -> dict:
 
 
 async def _fetch_macro() -> dict[str, dict]:
-    """Fetch all macro symbols concurrently with alias fallback + cache."""
+    """
+    Fetch all macro symbols concurrently with alias fallback + cache.
+    Before overwriting _MACRO_CACHE, snapshot current values into
+    _PREV_CLOSE_CACHE so the next call can compute velocity deltas.
+    """
+    global _PREV_CLOSE_CACHE
+    # Snapshot current cache as "previous session" BEFORE this fetch run.
+    _PREV_CLOSE_CACHE = {
+        k: float(v["close"])
+        for k, v in _MACRO_CACHE.items()
+        if v.get("close") is not None
+    }
     keys = list(_TICKER_ALIASES.keys())
     results = await asyncio.gather(*(_fetch_one(k) for k in keys), return_exceptions=True)
     out: dict[str, dict] = {}
@@ -173,6 +190,83 @@ async def _fetch_macro() -> dict[str, dict]:
         else:
             out[key] = result or _MACRO_CACHE.get(key, {})
     return out
+
+
+# ---------------------------------------------------------------------------
+# Velocity / delta calculator for narrative context
+# ---------------------------------------------------------------------------
+
+_VELOCITY_LABELS = [
+    # (min_pct, max_pct, verb, direction_word)
+    (5.0,   float("inf"), "surged",    "surge"),
+    (2.0,   5.0,          "ripped",    "rip"),
+    (0.5,   2.0,          "edged up",  "grind"),
+    (-0.5,  0.5,          "held flat", "consolidation"),
+    (-2.0, -0.5,          "dipped",    "drift"),
+    (-5.0, -2.0,          "tumbled",   "tumble"),
+    (float("-inf"), -5.0, "collapsed", "collapse"),
+]
+
+def _velocity_label(pct: float) -> tuple[str, str]:
+    """Return (verb, velocity_word) for a given % change."""
+    for lo, hi, verb, word in _VELOCITY_LABELS:
+        if lo <= pct < hi:
+            return verb, word
+    return "moved", "move"
+
+
+def _build_velocity_block(macro: dict[str, dict]) -> str:
+    """
+    Build the HISTORICAL CONTEXT & VELOCITY block injected into the prompt.
+    Compares current close against _PREV_CLOSE_CACHE to show delta and
+    generate narrative-ready velocity labels Gemini uses for storytelling.
+
+    Format per line:
+      Asset | Now: X | Prev: Y | Delta: +Z% | Velocity: "surged" (rip)
+    If no previous close is available, shows current value only.
+    """
+    # Key assets shown in the velocity block (subset — the ones that drive narrative)
+    _VELOCITY_KEYS = [
+        ("nasdaq_fut", "Nasdaq Futures (NQ)"),
+        ("spx_fut",    "S&P 500 Futures (ES)"),
+        ("rtx_fut",    "Russell 2000 (RTY)"),
+        ("vix",        "VIX"),
+        ("us10y",      "US 10Y Yield"),
+        ("us2y",       "US 2Y Yield"),
+        ("dxy",        "DXY Dollar"),
+        ("gold",       "Gold (GC)"),
+        ("oil",        "WTI Crude (CL)"),
+        ("dax",        "DAX"),
+        ("nikkei",     "Nikkei 225"),
+        ("hang_seng",  "Hang Seng"),
+    ]
+    lines = []
+    for key, label in _VELOCITY_KEYS:
+        current = macro.get(key, {})
+        cur_close = current.get("close")
+        prev_close = _PREV_CLOSE_CACHE.get(key)
+
+        if cur_close is None:
+            lines.append(f"  {label:<26} | Now: n/a")
+            continue
+
+        cur_f = float(cur_close)
+        suffix = "%" if key in ("us10y", "us2y") else ""
+
+        if prev_close and prev_close > 0 and prev_close != cur_f:
+            pct = (cur_f - prev_close) / prev_close * 100.0
+            verb, word = _velocity_label(pct)
+            lines.append(
+                f"  {label:<26} | Now: {_num(cur_f)}{suffix} | Prev: {_num(prev_close)}{suffix}"
+                f" | Delta: {pct:+.2f}% | Velocity: \"{verb}\" ({word})"
+            )
+        else:
+            # No prev close yet (first run of the session) — show current only
+            lines.append(
+                f"  {label:<26} | Now: {_num(cur_f)}{suffix}"
+                f" | Prev: (first run — no prior session data yet)"
+            )
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -368,6 +462,7 @@ def _build_prompt(brief_type: str, macro: dict[str, dict], headlines: list[dict]
         curve_label = "normal"
 
     news_block = _build_news_block(headlines)
+    velocity_block = _build_velocity_block(macro)
     brief_word = "Pre-Market" if brief_type == "pre" else "Post-Market"
 
     return f"""DATE: {date_label}
@@ -392,6 +487,15 @@ STOXX 50:   {_pct(stoxx.get('change_pct'))}
 Nikkei 225: {_pct(nkk.get('change_pct'))}
 Hang Seng:  {_pct(hsi.get('change_pct'))}
 KOSPI:      {_pct(ksp.get('change_pct'))}
+=======================================================================
+
+===== HISTORICAL CONTEXT & VELOCITY (use these to identify the PSD and write narratives) =====
+Each line shows: Asset | Current level | Previous session close | % Delta | Narrative verb
+Use the Velocity column to drive your storytelling. If VIX shows "collapsed (-17%)", write that it collapsed.
+If NQ shows "surged (+1.8%)", write that it surged — and explain WHY using the news feed below.
+Do NOT ignore this block. It is the difference between "VIX is 23" and "VIX collapsed to 23 as the war premium was aggressively priced out."
+
+{velocity_block}
 =======================================================================
 
 ===== RAW NEWS FEED FOR SYNTHESIS ({len(headlines)} items) =====
