@@ -4,6 +4,7 @@ import json
 import re
 from dataclasses import asdict
 from datetime import datetime, timezone
+from typing import Any
 
 import httpx
 from fastapi import FastAPI, HTTPException, Query as FQuery
@@ -15,6 +16,7 @@ from yfinance.exceptions import YFRateLimitError
 
 try:
     # Local package-style imports (used in local dev from repo root).
+    from backend.breadth import compute_market_ocean_sync, OceanSnapshot
     from backend.premarket_tv import PremarketTvParams, run_premarket_tv_scan_sync
     from backend.scraper import (
         build_theme_leaderboard,
@@ -55,6 +57,7 @@ except ModuleNotFoundError:
         scheduled_postmarket_loop,
         generate_postmarket_brief,
     )
+    from breadth import compute_market_ocean_sync, OceanSnapshot
     from market_time import is_nyse_trading_day_et, market_status_dict
     from earnings import EarningsCache, next_earnings_for_tickers
 
@@ -162,6 +165,9 @@ async def _themes_refresh_loop() -> None:
 _PREMARKET_GAP_CACHE: dict[str, tuple[float, dict]] = {}
 _PREMARKET_GAP_TTL_SEC = 50.0
 
+_OCEAN_CACHE: dict[str, Any] | None = None
+_OCEAN_CACHE_TS: float = 0.0
+_OCEAN_CACHE_TTL_SEC = 20 * 60.0  # recompute at most every 20 min (Yahoo-heavy call)
 
 # Cache ticker intel to avoid Yahoo throttling.
 _TICKER_INTEL_CACHE: dict[str, tuple[float, dict]] = {}
@@ -511,6 +517,40 @@ async def get_premarket_gappers_endpoint(
     }
     _PREMARKET_GAP_CACHE[cache_key] = (now, payload)
     return payload
+
+
+@app.get("/api/market-ocean")
+async def get_market_ocean() -> dict:
+    """
+    Market Ocean regime endpoint.
+    Returns S5FI (% of S&P 500 proxy above 50SMA) + speedboat count
+    with 10-day historical trend for both metrics.
+    Cached for 20 minutes — the underlying Yahoo download is expensive.
+    """
+    global _OCEAN_CACHE, _OCEAN_CACHE_TS
+    now = monotonic()
+    if _OCEAN_CACHE is not None and (now - _OCEAN_CACHE_TS) < _OCEAN_CACHE_TTL_SEC:
+        return _OCEAN_CACHE
+    try:
+        snapshot: OceanSnapshot = await asyncio.to_thread(compute_market_ocean_sync, history_days=10)
+        result = {
+            **snapshot.to_dict(),
+            "fetched_at_utc": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+        }
+    except Exception as exc:
+        # Never 500 — return a graceful degraded payload.
+        result = {
+            "s5fi": None,
+            "speedboat_count": None,
+            "s5fi_history": [],
+            "speedboat_history": [],
+            "universe_size": 0,
+            "fetched_at_utc": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+            "error": str(exc),
+        }
+    _OCEAN_CACHE = result
+    _OCEAN_CACHE_TS = now
+    return result
 
 
 @app.get("/api/theme-universe/spotlight")

@@ -1,6 +1,7 @@
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, Info, LayoutGrid, Moon, Plus, Search, Sunrise } from "lucide-react";
+import { AlertTriangle, BarChart2, Info, LayoutGrid, Moon, Plus, Search, Sunrise } from "lucide-react";
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import MarketBreadth from "./MarketBreadth";
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim() || "http://127.0.0.1:8000";
 const THEMES_CACHE_KEY = "power-theme:themes-cache:v1";
@@ -2017,7 +2018,7 @@ const GappersView = memo(function GappersView({
 });
 
 export function ThemeDashboard() {
-  const [tab, setTab] = useState<"scanner" | "gappers">("scanner");
+  const [tab, setTab] = useState<"scanner" | "gappers" | "breadth">("scanner");
   const [focusTicker, setFocusTicker] = useState<string | null>(null);
   const [focusTickerMeta, setFocusTickerMeta] = useState<TickerDrawerMeta | null>(null);
   const { payload, error, reload: reloadThemes, lastUpdatedAt, loading, loadingSince, pollMs } = useThemesPayload();
@@ -2180,6 +2181,16 @@ export function ThemeDashboard() {
             >
               Pre-Market Gappers
             </button>
+            <button
+              type="button"
+              onClick={() => setTab("breadth")}
+              className={`flex items-center gap-1.5 rounded-full border px-4 py-2 text-[11px] font-semibold transition-colors ${
+                tab === "breadth" ? "border-accent/40 bg-accent/20 text-white" : "border-terminal-border bg-terminal-bg text-slate-300 hover:border-slate-600 hover:text-white"
+              }`}
+            >
+              <BarChart2 className="h-3.5 w-3.5" aria-hidden />
+              Market Breadth
+            </button>
 
             <div className="relative ml-auto">
               <div className="flex items-center gap-2 rounded-md border border-terminal-border bg-terminal-bg px-2 py-2">
@@ -2322,6 +2333,8 @@ export function ThemeDashboard() {
                   <div className="flex h-full items-center justify-center text-slate-500">Loading scanner…</div>
                 )}
               </div>
+            ) : tab === "breadth" ? (
+              <MarketBreadth />
             ) : (
               <GappersView
                 gappers={gappers}
