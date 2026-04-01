@@ -605,22 +605,28 @@ function useThemesPayload() {
 }
 
 function useFdvLeaderboard(view: "themes" | "industry") {
-  const cacheKey = `power-theme:finviz-leaderboard:${view}:v1`;
+  const cacheKey = `power-theme:finviz-leaderboard:${view}:v3`;
   const [payload, setPayload] = useState<ApiPayload | null>(() => {
     try {
       const raw = window.localStorage.getItem(cacheKey);
       if (!raw) return null;
       const parsed = JSON.parse(raw) as { payload?: ApiPayload };
-      return parsed?.payload ?? null;
+      // Discard cache entries with empty themes so stale blanks don't persist.
+      const p = parsed?.payload ?? null;
+      if (!p || !p.themes?.length) return null;
+      return p;
     } catch {
       return null;
     }
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [retryAt, setRetryAt] = useState(0);
 
   useEffect(() => {
     let active = true;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
     async function load() {
       try {
         setLoading(true);
@@ -628,23 +634,32 @@ function useFdvLeaderboard(view: "themes" | "industry") {
         if (!res.ok) {
           if (res.status === 429) {
             if (!active) return;
-            setError("finviz 429");
+            setError("finviz 429 — rate limited, retrying in 20 s…");
+            retryTimer = setTimeout(() => { if (active) setRetryAt(Date.now()); }, 20_000);
             return;
           }
-          throw new Error(`finviz ${res.status}`);
+          throw new Error(`HTTP ${res.status}`);
         }
         const data = (await res.json()) as ApiPayload;
         if (!active) return;
+        if (!data.themes?.length) {
+          // Backend warmed up but Finviz returned empty — retry in 15 s.
+          setError(null);
+          setPayload(data);
+          retryTimer = setTimeout(() => { if (active) setRetryAt(Date.now()); }, 15_000);
+          return;
+        }
         setPayload(data);
         setError(null);
         try {
           window.localStorage.setItem(cacheKey, JSON.stringify({ payload: data, savedAt: Date.now() }));
         } catch {
-          // ignore
+          // ignore quota errors
         }
       } catch (e) {
         if (!active) return;
-        setError(e instanceof Error ? e.message : "Failed to load finviz leaderboard");
+        setError(e instanceof Error ? e.message : "Failed to load leaderboard");
+        retryTimer = setTimeout(() => { if (active) setRetryAt(Date.now()); }, 20_000);
       } finally {
         if (!active) return;
         setLoading(false);
@@ -653,8 +668,9 @@ function useFdvLeaderboard(view: "themes" | "industry") {
     void load();
     return () => {
       active = false;
+      if (retryTimer) clearTimeout(retryTimer);
     };
-  }, [view, cacheKey]);
+  }, [view, cacheKey, retryAt]);
 
   return { payload, loading, error };
 }
@@ -1982,14 +1998,25 @@ const ScannerView = memo(function ScannerView({
               <tbody>
                 {finvizLbLoading && !finvizFilteredRows.length ? (
                   <tr>
-                    <td colSpan={10} className="px-3 py-6 text-center text-xs text-slate-500">
-                      Loading Finviz {leaderboardMode}…
+                    <td colSpan={10} className="px-3 py-8 text-center text-xs text-slate-500">
+                      <span className="animate-pulse">Loading Finviz {leaderboardMode} data…</span>
                     </td>
                   </tr>
                 ) : finvizLbError && !finvizFilteredRows.length ? (
                   <tr>
                     <td colSpan={10} className="px-3 py-6 text-center text-xs text-rose-300">
                       Failed to load Finviz {leaderboardMode}: {finvizLbError}
+                    </td>
+                  </tr>
+                ) : !finvizLbLoading && sortedLeaderboardRows.length === 0 ? (
+                  <tr>
+                    <td colSpan={10} className="px-3 py-8 text-center">
+                      <p className="text-xs text-slate-500">
+                        No {leaderboardMode} data yet — Finviz may be warming up or rate-limiting.
+                      </p>
+                      <p className="mt-1 text-[10px] text-slate-600">
+                        The backend fetches live on first load (10–30 s). Try switching tabs or refreshing the page.
+                      </p>
                     </td>
                   </tr>
                 ) : (
