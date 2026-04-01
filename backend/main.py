@@ -523,9 +523,15 @@ async def get_premarket_gappers_endpoint(
 async def get_market_ocean() -> dict:
     """
     Market Ocean regime endpoint.
-    Returns S5FI (% of S&P 500 proxy above 50SMA) + speedboat count
-    with 10-day historical trend for both metrics.
-    Cached for 20 minutes — the underlying Yahoo download is expensive.
+    Returns:
+      s5fi              - % of S&P 500 proxy stocks above their 50 SMA (0-100)
+      speedboat_count   - count of elite universe stocks meeting ALL:
+                          price >$12, 30d avg daily $vol >$100M, change >+4%,
+                          20d ADR% >4%, market cap >$2B
+      is_blast_off      - true when speedboat_count >= 125 (institutional thrust signal)
+      blast_off_threshold - the threshold used (125), so the UI never hard-codes it
+      s5fi_history / speedboat_history - 10-day trend lists [{date, value}]
+    Cached 20 min; thread-safe via _OCEAN_COMPUTE_LOCK inside compute_market_ocean_sync.
     """
     global _OCEAN_CACHE, _OCEAN_CACHE_TS
     now = monotonic()
@@ -538,10 +544,12 @@ async def get_market_ocean() -> dict:
             "fetched_at_utc": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
         }
     except Exception as exc:
-        # Never 500 — return a graceful degraded payload.
+        # Never 500 — return a graceful degraded payload that still carries the flag.
         result = {
             "s5fi": None,
             "speedboat_count": None,
+            "is_blast_off": False,
+            "blast_off_threshold": 125,
             "s5fi_history": [],
             "speedboat_history": [],
             "universe_size": 0,

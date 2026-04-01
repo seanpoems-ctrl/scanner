@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from dataclasses import dataclass, field
-from datetime import date, timedelta
 from typing import Any
 
 import yfinance as yf
@@ -32,15 +32,22 @@ class BreadthSnapshot:
 class OceanSnapshot:
     """Market Ocean regime snapshot."""
     s5fi: float | None                       # % of S&P 500 stocks above 50-day MA (0-100)
-    speedboat_count: int | None              # count of universe stocks up >4% w/ vol>100k, price>$5
+    speedboat_count: int | None              # elite speedboat count for the most-recent session
     s5fi_history: list[dict[str, Any]] = field(default_factory=list)      # 10-day [{date, value}]
     speedboat_history: list[dict[str, Any]] = field(default_factory=list) # 10-day [{date, value}]
     universe_size: int = 0
+
+    @property
+    def is_blast_off(self) -> bool:
+        """True when elite speedboat count crosses the institutional thrust threshold."""
+        return (self.speedboat_count or 0) >= SPEEDBOAT_BLAST_OFF_THRESHOLD
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "s5fi": self.s5fi,
             "speedboat_count": self.speedboat_count,
+            "is_blast_off": self.is_blast_off,
+            "blast_off_threshold": SPEEDBOAT_BLAST_OFF_THRESHOLD,
             "s5fi_history": self.s5fi_history,
             "speedboat_history": self.speedboat_history,
             "universe_size": self.universe_size,
@@ -227,12 +234,20 @@ def _fetch_s5fi_sync(*, history_days: int = 10) -> tuple[float | None, list[dict
 #   Market cap     > $2 B  (yfinance fast_info, best-effort)
 # ---------------------------------------------------------------------------
 
-# Minimum market-cap tiers (yfinance fast_info.market_cap is best-effort).
+# Elite Speedboat filter thresholds — kept as module-level constants so the
+# endpoint and frontend tooltip descriptions are always in sync.
 _SPEEDBOAT_MIN_PRICE       = 12.0
-_SPEEDBOAT_MIN_AVG_DVOL_M  = 100.0   # million USD
+_SPEEDBOAT_MIN_AVG_DVOL_M  = 100.0   # million USD (30-day rolling avg daily $ vol)
 _SPEEDBOAT_MIN_CHG_PCT     = 4.0
-_SPEEDBOAT_MIN_ADR_PCT     = 4.0
+_SPEEDBOAT_MIN_ADR_PCT     = 4.0     # 20-day average daily range %
 _SPEEDBOAT_MIN_MCAP_B      = 2.0     # billion USD
+
+# Momentum-thrust signal: when elite speedboat count hits this threshold the
+# market is in a broad-participation thrust — maximise A+ exposure.
+SPEEDBOAT_BLAST_OFF_THRESHOLD = 125
+
+# One global lock so concurrent async calls don't double-download from Yahoo.
+_OCEAN_COMPUTE_LOCK = threading.Lock()
 
 
 def _fetch_speedboat_count_sync(
@@ -361,10 +376,17 @@ def _fetch_speedboat_count_sync(
 
 def compute_market_ocean_sync(*, history_days: int = 10) -> OceanSnapshot:
     """
-    Full Market Ocean snapshot:
+    Full Market Ocean snapshot (thread-safe via _OCEAN_COMPUTE_LOCK):
     - S5FI (% of S&P 500 proxy above 50SMA) with 10-day history
     - Elite Speedboat count with institutional filters, with 10-day history
+    Guarded by a threading.Lock so that concurrent async.to_thread calls from
+    multiple HTTP requests do not trigger duplicate Yahoo downloads.
     """
+    with _OCEAN_COMPUTE_LOCK:
+        return _compute_market_ocean_inner(history_days=history_days)
+
+
+def _compute_market_ocean_inner(*, history_days: int = 10) -> OceanSnapshot:
     tickers = _load_universe_tickers()
     s5fi, s5fi_hist = _fetch_s5fi_sync(history_days=history_days)
     speedboat_count, speedboat_hist = _fetch_speedboat_count_sync(tickers, history_days=history_days)
