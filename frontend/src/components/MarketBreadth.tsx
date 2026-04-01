@@ -167,13 +167,14 @@ function S5FiGauge({ value }: { value: number | null }) {
             <circle cx={cx} cy={cy} r={5} fill={color} />
           </>
         )}
-        <text x={cx} y={cy + 32} textAnchor="middle" fill="white" fontSize={22} fontWeight={700} fontFamily="monospace">
-          {value !== null ? `${pct.toFixed(1)}%` : "—"}
-        </text>
         <text x={arcStart.x - 4} y={arcStart.y + 14} textAnchor="end" fill="#64748b" fontSize={8}>0%</text>
         <text x={arcEnd.x + 4} y={arcEnd.y + 14} textAnchor="start" fill="#64748b" fontSize={8}>100%</text>
         <text x={cx} y={cy - r - 6} textAnchor="middle" fill="#64748b" fontSize={8}>50%</text>
       </svg>
+      {/* Value lives outside the SVG so the needle can never overlap it */}
+      <p className="mt-2 text-center font-mono text-4xl font-bold text-white" style={{ color }}>
+        {value !== null ? `${pct.toFixed(1)}%` : "—"}
+      </p>
       <p className="mt-1 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
         S&P 500 Stocks Above 50 SMA
       </p>

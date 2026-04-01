@@ -533,24 +533,6 @@ async def get_market_ocean() -> dict:
       s5fi_history / speedboat_history - 10-day trend lists [{date, value}]
     Cached 20 min; thread-safe via _OCEAN_COMPUTE_LOCK inside compute_market_ocean_sync.
     """
-    # TEMP: hardcoded preview — Deep Ocean (s5fi=65) + Elite Blast-off (count=145 >= 125).
-    # Remove this block once the blast-off glow and rocket directive are confirmed in the UI.
-    _today = datetime.now(timezone.utc).date().isoformat()
-    _s5fi_vals  = [50, 52, 55, 58, 60, 62, 65]
-    _boat_vals  = [40, 50, 80, 110, 120, 130, 145]
-    return {
-        "s5fi": 65.0,
-        "speedboat_count": 145,
-        "is_blast_off": True,
-        "blast_off_threshold": 125,
-        "s5fi_history":        [{"date": _today, "value": v} for v in _s5fi_vals],
-        "speedboat_history":   [{"date": _today, "value": v} for v in _boat_vals],
-        "universe_size": 312,
-        "fetched_at_utc": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
-        "note": "TEMP ui-preview — remove after blast-off visual is confirmed",
-    }
-    # END TEMP
-
     global _OCEAN_CACHE, _OCEAN_CACHE_TS
     now = monotonic()
     if _OCEAN_CACHE is not None and (now - _OCEAN_CACHE_TS) < _OCEAN_CACHE_TTL_SEC:
