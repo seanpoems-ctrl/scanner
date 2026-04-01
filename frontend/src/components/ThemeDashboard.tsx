@@ -1102,6 +1102,28 @@ function ImpactBadge({ level }: { level: string }) {
 }
 
 // ── Catalyst structured table ──────────────────────────────────────────────
+// Splits "Bullish. Rest of sentence" → colored first word + dimmer rest
+function ImpactText({ text, size }: { text: string; size: string }) {
+  const sentimentMatch = text.match(/^(Bullish|Bearish|Mixed|Neutral)\.\s*/i);
+  if (!sentimentMatch) {
+    return <span className={`text-slate-400 ${size}`}>{text}</span>;
+  }
+  const sentiment = sentimentMatch[1];
+  const rest = text.slice(sentimentMatch[0].length);
+  const sentColor =
+    sentiment.toLowerCase() === "bullish"
+      ? "text-emerald-400 font-bold"
+      : sentiment.toLowerCase() === "bearish"
+      ? "text-rose-400 font-bold"
+      : "text-amber-300 font-bold";
+  return (
+    <span className={size}>
+      <span className={sentColor}>{sentiment}.</span>
+      {rest && <span className="text-slate-400"> {rest}</span>}
+    </span>
+  );
+}
+
 function CatalystTable({ rows, isModal = false }: { rows: CatalystRow[]; isModal?: boolean }) {
   if (!rows || rows.length === 0) return null;
   const th = isModal ? "text-[11px]" : "text-[10px]";
@@ -1121,9 +1143,14 @@ function CatalystTable({ rows, isModal = false }: { rows: CatalystRow[]; isModal
         <tbody>
           {rows.map((row, ri) => (
             <tr key={ri} className="border-b border-slate-800/60 transition-colors hover:bg-slate-800/10">
+              {/* Catalyst — bold white */}
               <td className={`px-4 py-3 font-semibold text-slate-100 ${td}`}>{row.catalyst}</td>
-              <td className={`px-4 py-3 text-slate-300 ${td}`}>{row.event}</td>
-              <td className={`px-4 py-3 text-slate-400 ${td}`}>{row.impact}</td>
+              {/* Event — bold, slightly brighter */}
+              <td className={`px-4 py-3 font-bold text-slate-100 ${td}`}>{row.event}</td>
+              {/* Impact — sentiment-colored first word + dimmer rest */}
+              <td className="px-4 py-3">
+                <ImpactText text={row.impact} size={td} />
+              </td>
               <td className="px-4 py-3">
                 <ImpactBadge level={row.impact_level} />
               </td>

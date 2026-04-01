@@ -260,9 +260,26 @@ async def _gather_headlines(brief_type: str) -> list[dict]:
             if key not in seen:
                 seen.add(key)
                 out.append(h)
-                if len(out) >= 12:
+                if len(out) >= 20:
                     return out
     return out
+
+
+def _build_news_block(headlines: list[dict]) -> str:
+    """
+    Build a structured news feed string for Gemini synthesis.
+    Format: [N] Title | [N+1] Title ...
+    Each item is numbered so the model can cross-reference themes.
+    Returns a string ready for injection into the prompt.
+    """
+    if not headlines:
+        return "No headlines available — focus on the economic calendar for this session."
+    lines = []
+    for i, h in enumerate(headlines[:20], 1):
+        title = h.get("title", "").strip()
+        if title:
+            lines.append(f"[{i:02d}] {title}")
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -285,11 +302,17 @@ ABSOLUTE RULES — violating any is unacceptable:
 1. ZERO PLACEHOLDERS: "—", "N/A", "Calculating", "n/a", "()", or blank cells are FORBIDDEN. Use exact numbers from context.
 2. FIDELITY: Every number comes verbatim from the LIVE MARKET DATA block. Do not round, estimate, or fabricate.
 3. DENSITY: No fluff, no disclaimers, no filler. If a sentence does not give the reader an edge, cut it.
-4. CATALYST JSON: Pillar 3 MUST be a fenced ```json_catalysts block containing a JSON array. Schema:
-   [{"catalyst": "<specific named event>", "event": "<precise data/action>", "impact": "<mechanical sector/asset impact>", "impact_level": "Extreme High"|"High"|"Medium"|"Low"}]
-   - 3-5 items. "catalyst" must be a specific name, never "Economic Data" or "Market Headline".
-   - "impact" must name which asset class or sector is mechanically affected and how.
-5. FORMATTING: Levels as "NQ 18,247 / +0.31% vs. prev. 18,190". Include yesterday's close when change is noteworthy.
+4. CATALYST JSON: Pillar 3 MUST be a fenced ```json_catalysts block. Schema:
+   [{"catalyst": string, "event": string, "impact": string, "impact_level": "Extreme High"|"High"|"Medium"|"Low"}]
+   Strict field rules:
+   - "catalyst": The THEME name you extracted (e.g., "Fed Policy Pivot", "Hormuz De-escalation", "PCE Print", "Earnings: NVDA"). NEVER "Market Headline", "Economic Data", or "Daily News".
+   - "event": The specific data point, figure, or named action (e.g., "Core PCE 2.6% vs. 2.7% est. — 3rd consecutive beat", "Iran agrees to indirect Hormuz talks", "NVDA Q1 guidance cut -8%").
+   - "impact": Start with a sentiment word (e.g., "Bullish.", "Bearish.", "Mixed.") then explain the mechanical link to assets (e.g., "Bullish. Removed duration headwind on Tech; QQQ rerated +1.8%. Short-covering triggered in semis."). Use institutional verbs: Ignited, Squeezed, Trapped, Repriced, Capitulated, Snapped back.
+   - "impact_level": Must be one of: "Extreme High", "High", "Medium", "Low" — based on actual market-moving potential for THIS session.
+   SYNTHESIS RULE: Do NOT output one row per headline. Group related headlines into a THEME. 5 headlines about oil = one row: catalyst "Geopolitical Risk Premium", event "Iran/Hormuz ceasefire proposal — crude down $3.40", impact "Bearish for energy; removed risk premium from ES."
+   If RAW NEWS FEED is thin, use the economic calendar: "FOMC Minutes", "Jobless Claims", "ISM Manufacturing", etc.
+   FORBIDDEN: generic catalyst names. Every row must be actionable intelligence.
+5. FORMATTING: Levels as "NQ 18,247 / +0.31%". Include prior-session close context where velocity is significant.
 6. MOOD NAMING: Pillar 1 must open with the regime name in bold (e.g., "**Volatile Relief** —").
 """
 
@@ -327,7 +350,7 @@ def _build_prompt(brief_type: str, macro: dict[str, dict], headlines: list[dict]
         spread_str = "0.00%"
         curve_label = "normal"
 
-    hl_block = "\n".join(f"- {h['title']}" for h in headlines[:10]) or "- No headlines available."
+    news_block = _build_news_block(headlines)
     brief_word = "Pre-Market" if brief_type == "pre" else "Post-Market"
 
     return f"""DATE: {date_label}
@@ -354,8 +377,15 @@ Hang Seng:  {_pct(hsi.get('change_pct'))}
 KOSPI:      {_pct(ksp.get('change_pct'))}
 =======================================================================
 
-TODAY'S HEADLINES:
-{hl_block}
+===== RAW NEWS FEED FOR SYNTHESIS ({len(headlines)} items) =====
+Step 1: Scan ALL items below.
+Step 2: Group items sharing a theme (e.g., multiple oil headlines = one "Geopolitical Risk Premium" catalyst).
+Step 3: Identify the 3-5 most market-moving thematic catalysts for THIS session.
+Step 4: If the feed is thin, substitute the most relevant scheduled economic calendar events (FOMC, CPI, Jobs, ISM, Auction).
+FORBIDDEN: outputting "Market Headline" or "Economic Data" as a catalyst name.
+
+{news_block}
+=======================================================================
 
 ===== REQUIRED OUTPUT — COPY THIS STRUCTURE EXACTLY =====
 
@@ -363,50 +393,50 @@ TODAY'S HEADLINES:
 
 ### 1. US Market Mood
 Open with the regime name in bold: "**[Regime Name]** —" (e.g., "**Volatile Relief** —", "**Defensive Crouch** —", "**Forced Unwind** —").
-Then 2 sentences: use NQ and ES exact values, compare to prior session to show velocity, name the single dominant macro driver that owns this move.
+Then 2 sentences: cite NQ and ES exact values from data above, compare to prior session to convey velocity, name the single dominant macro force.
 
 ### 2. Global Synchronization
-Line 1 — Data: "DAX {_pct(dax.get('change_pct'))} · FTSE {_pct(ftse.get('change_pct'))} · STOXX {_pct(stoxx.get('change_pct'))} | Nikkei {_pct(nkk.get('change_pct'))} · Hang Seng {_pct(hsi.get('change_pct'))} · KOSPI {_pct(ksp.get('change_pct'))}"
-Line 2 — Insight: Name whether risk assets are aligned or diverging. Identify the strongest and weakest region and what that divergence signals for today's US open.
+Line 1 — Data only: "DAX {_pct(dax.get('change_pct'))} · FTSE {_pct(ftse.get('change_pct'))} · STOXX {_pct(stoxx.get('change_pct'))} | Nikkei {_pct(nkk.get('change_pct'))} · Hang Seng {_pct(hsi.get('change_pct'))} · KOSPI {_pct(ksp.get('change_pct'))}"
+Line 2 — Insight: aligned or diverging? Name strongest/weakest region and what the divergence signals for the US open.
 
 ### 3. Economic Data & Catalysts
-RULES FOR THIS SECTION:
-- "catalyst" = specific named event only (e.g., "PCE Print", "ISM Services", "FOMC Minutes", "Earnings: NVDA"). NEVER "Economic Data" or "Headline".
-- "event" = the precise outcome or figure (e.g., "Core PCE 2.6% vs. 2.7% est. — 3rd consecutive miss").
-- "impact" = mechanical effect on a named asset class or sector (e.g., "Removed duration headwind on Tech; QQQ rerated +1.8% in first 30 min").
-- "impact_level" = one of: "Extreme High", "High", "Medium", "Low".
+SYNTHESIS TASK: From the RAW NEWS FEED above, group related headlines into 3-5 thematic catalysts. Do NOT list headlines individually.
+Each catalyst must follow this schema exactly:
+- "catalyst": thematic name (e.g., "Fed Hawkish Pivot", "Hormuz De-escalation", "PCE Beat", "Earnings: AAPL")
+- "event": specific data point or named action with figures (e.g., "Core PCE 2.6% vs. 2.7% est. — 3rd consecutive miss")
+- "impact": start with sentiment ("Bullish.", "Bearish.", "Mixed.") then name the mechanically affected sector/asset and what happened to it (use institutional verbs: Ignited, Squeezed, Repriced, Snapped back, Trapped, Capitulated)
+- "impact_level": "Extreme High", "High", "Medium", or "Low"
 
 ```json_catalysts
 [
-  {{"catalyst": "<specific named event>", "event": "<exact data/outcome>", "impact": "<mechanical sector/asset impact with verb>", "impact_level": "Extreme High"}},
-  {{"catalyst": "<specific named event>", "event": "<exact data/outcome>", "impact": "<mechanical sector/asset impact with verb>", "impact_level": "High"}},
-  {{"catalyst": "<specific named event>", "event": "<exact data/outcome>", "impact": "<mechanical sector/asset impact with verb>", "impact_level": "Medium"}},
-  {{"catalyst": "<specific named event>", "event": "<exact data/outcome>", "impact": "<mechanical sector/asset impact with verb>", "impact_level": "Low"}}
+  {{"catalyst": "<themed name — NOT 'Market Headline'>", "event": "<specific figure or named event>", "impact": "Bullish/Bearish/Mixed. <mechanical sector impact with verb>", "impact_level": "Extreme High"}},
+  {{"catalyst": "<themed name>", "event": "<specific figure or named event>", "impact": "Bullish/Bearish/Mixed. <mechanical sector impact with verb>", "impact_level": "High"}},
+  {{"catalyst": "<themed name>", "event": "<specific figure or named event>", "impact": "Bullish/Bearish/Mixed. <mechanical sector impact with verb>", "impact_level": "Medium"}}
 ]
 ```
 
 ### 4. Volatility & Risk Gauges
-- VIX {_num(vix.get('close'))}: [Green Zone <15 | Yellow Zone 15-25 | Red Zone 25-35 | Extreme Zone >35] — state what VIX at this level mechanically does to options pricing and dealer hedging flows.
-- Yield curve {spread_str} ({curve_label}): one sentence on credit spread implications and which sectors are structurally pressured or relieved.
-- **Risk Status: [Green/Yellow/Red/Extreme]** — one sentence: what this risk level mandates in terms of position sizing and hedge ratio.
+- VIX {_num(vix.get('close'))}: [Green <15 | Yellow 15-25 | Red 25-35 | Extreme >35] — state the mechanical effect on options pricing and dealer gamma positioning.
+- Yield curve {spread_str} ({curve_label}): credit spread implication and which sectors are structurally pressured or relieved.
+- **Risk Status: [Green/Yellow/Red/Extreme]** — one sentence on what this mandates for position sizing and hedge ratio.
 
 ### 5. Market Breadth
 - S5FI estimate: [X-Y]% — Internal Health: [Broad/Narrow/Mixed]
-- Is this a narrow leadership move (few mega-caps carrying the tape) or genuine broad participation? Name which sectors confirm or diverge.
+- Narrow (mega-cap driven) or broad participation? Name the confirming and diverging sectors.
 
 ### 6. Fixed Income & Yields
-- 10Y at {_num(us10y.get('close'))}%: state the specific yield threshold that flips growth stocks from tailwind to headwind, and whether we are above or below it today.
-- Curve ({spread_str}, {curve_label}): what does this shape signal for bank NIM, credit availability, and cyclical vs. defensive rotation over the next 30 days?
+- 10Y at {_num(us10y.get('close'))}%: name the exact yield threshold that flips growth stocks headwind/tailwind and state whether we are above or below it.
+- Curve ({spread_str}, {curve_label}): bank NIM, credit availability, and cyclical vs. defensive rotation signal for next 30 days.
 
 ### 7. Actionable Technicals & The Analyst Lesson
 **Technicals:**
-- Key SPX level: [exact price — identify whether it is the 200d MA, a reclaim level, or prior distribution zone, and what a hold vs. break means for positioning]
-- High-conviction setup: [one specific trade: sector + catalyst + entry condition — e.g., "Long semis on any pullback to 50d if 10Y holds below 4.40%"]
+- Key SPX level: [exact price — 200d MA / reclaim / distribution zone — state what a hold vs. break means for institutional positioning]
+- High-conviction setup: [sector + catalyst + specific entry condition, e.g., "Long semis on pullback to 50d if 10Y holds below 4.40%"]
 
 **The Analyst Lesson:**
 > [One non-generic, cycle-aware insight anchored to today's specific data — name the pattern, not a platitude]
 
-Tactical takeaway: [One sentence: specific action, specific condition, specific sizing rule]
+Tactical takeaway: [Specific action + specific condition + sizing discipline — one sentence]
 
 ---
 """
@@ -540,23 +570,80 @@ def _heuristic_brief(brief_type: str, macro: dict[str, dict], headlines: list[di
 
     brief_word = "Pre-Market" if brief_type == "pre" else "Post-Market"
 
-    # Catalyst JSON block — use 4-tier impact levels
-    impact_levels = ["Extreme High", "High", "Medium", "Low"]
+    # Catalyst heuristic: keyword-group headlines into themes rather than
+    # listing them individually, so the fallback never shows "Market Headline".
+    _THEME_KEYWORDS: list[tuple[str, str, str]] = [
+        ("fed|fomc|rate|powell|hawkish|dovish|pivot",
+         "Fed Policy", "Monetary policy signal repriced across rate-sensitive sectors."),
+        ("inflation|cpi|pce|core|prices",
+         "Inflation Print", "Duration assets repriced; Tech vs. Financials rotation triggered."),
+        ("jobs|payroll|unemployment|adp|claims|labor",
+         "Labor Market Data", "Risk appetite adjusted on employment outlook."),
+        ("war|geopolit|iran|russia|ukraine|hormuz|sanction|military",
+         "Geopolitical Risk", "Safety bid in Gold and Treasuries; Energy premium volatile."),
+        ("earnings|guidance|revenue|eps|beat|miss|quarter",
+         "Earnings Catalyst", "Single-stock and sector ETF repriced on guidance revision."),
+        ("china|tariff|trade|export|import|yuan|renminbi",
+         "Trade & China Risk", "EM and export-exposed sectors repriced on trade flow signal."),
+        ("gdp|growth|recession|contraction|expansion",
+         "Growth Outlook", "Cyclicals vs. defensives rotation signal in play."),
+        ("oil|crude|opec|energy|nat.?gas|wti|brent",
+         "Energy / Commodities", "Energy sector and transportation costs repriced."),
+        ("bank|credit|spread|default|svb|financials",
+         "Credit & Financial Stress", "Risk-off signal; financials and HY spreads under pressure."),
+    ]
+
+    grouped: dict[str, list[str]] = {}
+    ungrouped: list[str] = []
+    for h in headlines[:20]:
+        title_lower = (h.get("title") or "").lower()
+        matched = False
+        for pattern, theme, _ in _THEME_KEYWORDS:
+            if re.search(pattern, title_lower):
+                grouped.setdefault(theme, []).append(h.get("title", ""))
+                matched = True
+                break
+        if not matched:
+            ungrouped.append(h.get("title", ""))
+
+    # Build catalyst rows from grouped themes, falling back to econ calendar
     catalyst_rows = []
-    for i, h in enumerate(headlines[:4]):
-        catalyst_rows.append({
-            "catalyst": "Market Headline",
-            "event": h["title"][:70],
-            "impact": "Monitor for directional confirmation at session open",
-            "impact_level": impact_levels[min(i, len(impact_levels) - 1)],
-        })
+    tier = ["Extreme High", "High", "Medium", "Low"]
+    t_idx = 0
+    for pattern, theme, default_impact in _THEME_KEYWORDS:
+        if theme in grouped and t_idx < 4:
+            titles = grouped[theme]
+            event_text = titles[0][:80] if len(titles) == 1 else f"{len(titles)} related items: {titles[0][:55]}…"
+            catalyst_rows.append({
+                "catalyst": theme,
+                "event": event_text,
+                "impact": default_impact,
+                "impact_level": tier[t_idx],
+            })
+            t_idx += 1
+
+    # Fill with econ calendar placeholders if under 3 rows
+    econ_fillers = [
+        ("FOMC Meeting / Fed Speakers", "Scheduled remarks — watch for tone shift on cuts timeline.",
+         "Rate-sensitive assets on standby; any hawkish tilt reprices short-end.", "High"),
+        ("Economic Calendar", "Jobless Claims / ISM / Housing data due this session.",
+         "Mixed. Data-dependent session; breadth confirmation required before sizing up.", "Medium"),
+        ("Treasury Auction", "3Y/10Y/30Y supply hitting this week.",
+         "Bearish for duration if tails; yields move inversely.", "Low"),
+    ]
+    for cat, ev, imp, lvl in econ_fillers:
+        if len(catalyst_rows) >= 3:
+            break
+        catalyst_rows.append({"catalyst": cat, "event": ev, "impact": imp, "impact_level": lvl})
+
     if not catalyst_rows:
         catalyst_rows = [{
             "catalyst": "Session Open",
-            "event": f"{brief_word} session — no headlines fetched",
-            "impact": "Follow price action; tape is the primary signal",
+            "event": f"{brief_word} session — no news fetched",
+            "impact": "Follow price action; tape is the primary signal.",
             "impact_level": "Medium",
         }]
+
     catalyst_json = json.dumps(catalyst_rows, indent=2)
 
     return f"""## Gen {time_label}
