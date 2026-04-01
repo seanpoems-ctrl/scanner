@@ -6,7 +6,7 @@ REM  Schedule this file with Windows Task Scheduler (see setup_task.bat).
 REM ─────────────────────────────────────────────────────────────────────────
 
 SET PROJECT_ROOT=c:\Users\arabi\.cursor\Project 3
-SET PYTHON=python
+SET PYTHON=py
 
 REM Change to project root so relative imports work correctly.
 cd /d "%PROJECT_ROOT%"
