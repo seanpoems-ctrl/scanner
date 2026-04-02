@@ -198,6 +198,26 @@ type ThemeUniverseSpotlight = {
   worst: { ticker: string; today_return_pct: number }[];
 };
 
+type IndustryMoversRow = { ticker: string; close: number; change_pct: number };
+
+type IndustryMoversPayload = {
+  ok: boolean;
+  industry: string;
+  parent_category?: string | null;
+  detail?: string | null;
+  top_gainers: IndustryMoversRow[];
+  top_losers: IndustryMoversRow[];
+  rest: IndustryMoversRow[];
+  fetched_at_utc?: string;
+};
+
+type IndustrySubSpotlightSelection = {
+  parent: string;
+  theme: string;
+  relativeStrength1M: number | null;
+  leaders: string[];
+};
+
 type TickerSuggestRow = { ticker: string; name: string };
 
 type TickerIntel = {
@@ -1706,6 +1726,46 @@ function useUniverseSpotlight(label: string | null) {
   return { data, loading };
 }
 
+function useIndustrySubMovers(sel: { parent: string; theme: string } | null, enabled: boolean) {
+  const [data, setData] = useState<IndustryMoversPayload | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!enabled || !sel?.theme) {
+      setData(null);
+      setLoading(false);
+      return;
+    }
+    let active = true;
+    setLoading(true);
+    const p = new URLSearchParams();
+    p.set("industry", sel.theme);
+    p.set("parent", sel.parent);
+    fetch(`${API_BASE_URL}/api/industry/subindustry-movers?${p.toString()}`)
+      .then(async (r) => {
+        if (!r.ok) throw new Error(`industry movers ${r.status}`);
+        return (await r.json()) as IndustryMoversPayload;
+      })
+      .then((d) => {
+        if (!active) return;
+        setData(d);
+      })
+      .catch(() => {
+        if (!active) return;
+        setData(null);
+      })
+      .finally(() => {
+        if (!active) return;
+        setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [sel?.parent, sel?.theme, enabled]);
+
+  return { data, loading };
+}
+
 const ScannerView = memo(function ScannerView({
   payload,
   spotlightThemeName,
@@ -1732,6 +1792,7 @@ const ScannerView = memo(function ScannerView({
   const [drilldownLabel, setDrilldownLabel] = useState<string | null>(null);
   // expandedTheme: for accordion-style industry grouping
   const [expandedTheme, setExpandedTheme] = useState<string | null>(null);
+  const [industrySubSpotlight, setIndustrySubSpotlight] = useState<IndustrySubSpotlightSelection | null>(null);
   const now_et_h = new Date().toLocaleString("en-US", { timeZone: "America/New_York", hour: "numeric", hour12: false });
   const [briefMode, setBriefMode] = useState<"pre" | "post">(Number(now_et_h) < 17 ? "pre" : "post");
   const [sortKey, setSortKey] = useState<
@@ -1757,6 +1818,10 @@ const ScannerView = memo(function ScannerView({
   useEffect(() => {
     setExpandedTheme(null);
   }, [leaderboardMode, drilldownLabel]);
+
+  useEffect(() => {
+    if (leaderboardMode === "themes") setIndustrySubSpotlight(null);
+  }, [leaderboardMode]);
 
   const { payload: finvizLeaderboardPayload, loading: finvizLbLoading, error: finvizLbError } = useFdvLeaderboard(leaderboardMode);
   const finvizRows = finvizLeaderboardPayload?.themes ?? [];
@@ -1912,7 +1977,14 @@ const ScannerView = memo(function ScannerView({
     return themes.find((t) => t.theme === spotlightThemeName) ?? filteredThemes[0] ?? sortedThemes[0] ?? null;
   }, [themes, spotlightThemeName, filteredThemes, sortedThemes]);
 
-  const { data: uniSpotlight } = useUniverseSpotlight(spotlightTheme?.theme ?? null);
+  const showIndustrySubSpot = leaderboardMode === "industry" && industrySubSpotlight !== null;
+  const { data: uniSpotlight } = useUniverseSpotlight(
+    showIndustrySubSpot ? null : spotlightTheme?.theme ?? null
+  );
+  const { data: industryMovers, loading: industryMoversLoading } = useIndustrySubMovers(
+    industrySubSpotlight ? { parent: industrySubSpotlight.parent, theme: industrySubSpotlight.theme } : null,
+    showIndustrySubSpot
+  );
   const constituents = useMemo(() => {
     const list = spotlightTheme?.stocks ?? [];
     if (!list.length) return [];
@@ -1958,12 +2030,112 @@ const ScannerView = memo(function ScannerView({
         <div className="rounded-xl border border-terminal-border bg-terminal-card shadow-sm">
           <header className="border-b border-terminal-border px-4 py-3">
             <h3 className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Thematic Spotlight</h3>
-            <p className="mt-0.5 truncate text-[10px] text-slate-600">{spotlightTheme?.theme ?? "—"}</p>
+            <p className="mt-0.5 truncate text-[10px] text-slate-600">
+              {showIndustrySubSpot && industrySubSpotlight
+                ? `${industrySubSpotlight.parent} · ${industrySubSpotlight.theme}`
+                : spotlightTheme?.theme ?? "—"}
+            </p>
           </header>
           <div className="px-4 py-3">
-            {!spotlightTheme ? (
+            {!spotlightTheme && !showIndustrySubSpot ? (
               <p className="text-xs text-slate-500">No theme selected.</p>
-            ) : (
+            ) : showIndustrySubSpot && industrySubSpotlight ? (
+              <>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="min-w-0 flex-1 text-[12px] font-semibold leading-snug text-white">
+                    <span className="text-slate-400">{industrySubSpotlight.parent}</span>
+                    <span className="mx-1 text-slate-600">·</span>
+                    <span>{industrySubSpotlight.theme}</span>
+                  </p>
+                  <p className="font-mono text-[11px] text-slate-400 tabular-nums">
+                    RS{" "}
+                    {industrySubSpotlight.relativeStrength1M == null ||
+                    !Number.isFinite(industrySubSpotlight.relativeStrength1M)
+                      ? "—"
+                      : industrySubSpotlight.relativeStrength1M.toFixed(1)}
+                  </p>
+                </div>
+                <p className="mt-1 text-[10px] text-slate-600">
+                  Leaders:{" "}
+                  <span className="font-mono text-slate-300">
+                    {industrySubSpotlight.leaders.slice(0, 6).join(", ") || "—"}
+                  </span>
+                </p>
+                {industryMoversLoading ? (
+                  <p className="mt-3 text-xs text-slate-500">Loading movers…</p>
+                ) : industryMovers && !industryMovers.ok ? (
+                  <p className="mt-3 text-xs text-rose-300/90">
+                    {industryMovers.detail ?? "Could not load movers for this industry."}
+                  </p>
+                ) : (
+                  <>
+                    <div className="mt-3 space-y-3">
+                      <div>
+                        <p className="mb-1.5 text-[9px] font-semibold uppercase tracking-wider text-slate-500">Top gainers</p>
+                        <div className="space-y-1.5">
+                          {(industryMovers?.top_gainers ?? []).map((r) => (
+                            <div
+                              key={`g-${r.ticker}`}
+                              className="flex items-center justify-between gap-2 rounded-lg border border-terminal-border bg-terminal-bg/40 px-2.5 py-1.5"
+                            >
+                              <span className="font-mono text-[12px] font-semibold text-accent">{r.ticker}</span>
+                              <span className="font-mono text-[11px] text-slate-400 tabular-nums">{fmtPrice(r.close)}</span>
+                              <span className={`font-mono text-[11px] tabular-nums ${pctClass(r.change_pct)}`}>
+                                {r.change_pct >= 0 ? "+" : ""}
+                                {r.change_pct.toFixed(2)}%
+                              </span>
+                            </div>
+                          ))}
+                          {!(industryMovers?.top_gainers?.length) ? (
+                            <p className="text-[10px] text-slate-600">No gainers data.</p>
+                          ) : null}
+                        </div>
+                      </div>
+                      <div>
+                        <p className="mb-1.5 text-[9px] font-semibold uppercase tracking-wider text-slate-500">Top losers</p>
+                        <div className="space-y-1.5">
+                          {(industryMovers?.top_losers ?? []).map((r) => (
+                            <div
+                              key={`l-${r.ticker}`}
+                              className="flex items-center justify-between gap-2 rounded-lg border border-terminal-border bg-terminal-bg/40 px-2.5 py-1.5"
+                            >
+                              <span className="font-mono text-[12px] font-semibold text-accent">{r.ticker}</span>
+                              <span className="font-mono text-[11px] text-slate-400 tabular-nums">{fmtPrice(r.close)}</span>
+                              <span className={`font-mono text-[11px] tabular-nums ${pctClass(r.change_pct)}`}>
+                                {r.change_pct >= 0 ? "+" : ""}
+                                {r.change_pct.toFixed(2)}%
+                              </span>
+                            </div>
+                          ))}
+                          {!(industryMovers?.top_losers?.length) ? (
+                            <p className="text-[10px] text-slate-600">No losers data.</p>
+                          ) : null}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="mt-4 rounded-lg border border-terminal-border bg-terminal-bg/30 px-3 py-2">
+                      <p className="mb-2 text-[9px] font-semibold uppercase tracking-wider text-slate-500">All other stocks</p>
+                      <div className="max-h-40 space-y-1 overflow-y-auto text-[11px]">
+                        {(industryMovers?.rest ?? []).length ? (
+                          (industryMovers?.rest ?? []).map((r) => (
+                            <div key={`r-${r.ticker}`} className="flex items-center justify-between gap-2 border-b border-terminal-border/40 py-1 last:border-0">
+                              <span className="font-mono font-medium text-slate-200">{r.ticker}</span>
+                              <span className="font-mono text-slate-500 tabular-nums">{fmtPrice(r.close)}</span>
+                              <span className={`font-mono tabular-nums ${pctClass(r.change_pct)}`}>
+                                {r.change_pct >= 0 ? "+" : ""}
+                                {r.change_pct.toFixed(2)}%
+                              </span>
+                            </div>
+                          ))
+                        ) : (
+                          <p className="text-[10px] text-slate-600">No additional names (or universe is small).</p>
+                        )}
+                      </div>
+                    </div>
+                  </>
+                )}
+              </>
+            ) : spotlightTheme ? (
               <>
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <p className="text-[12px] font-semibold text-white">{spotlightTheme.theme}</p>
@@ -1996,7 +2168,7 @@ const ScannerView = memo(function ScannerView({
                   ) : null}
                 </div>
               </>
-            )}
+            ) : null}
           </div>
         </div>
 
@@ -2072,7 +2244,12 @@ const ScannerView = memo(function ScannerView({
               <div className="flex items-center gap-1 rounded-full border border-terminal-border bg-terminal-bg p-1">
                 <button
                   type="button"
-                  onClick={() => { setLeaderboardMode("themes"); setDrilldownLabel(null); setExpandedTheme(null); }}
+                  onClick={() => {
+                    setLeaderboardMode("themes");
+                    setDrilldownLabel(null);
+                    setExpandedTheme(null);
+                    setIndustrySubSpotlight(null);
+                  }}
                   className={`rounded-full px-3 py-1.5 text-[11px] font-semibold transition-colors ${
                     leaderboardMode === "themes" ? "bg-accent/20 text-white" : "text-slate-400 hover:text-white"
                   }`}
@@ -2081,7 +2258,12 @@ const ScannerView = memo(function ScannerView({
                 </button>
                 <button
                   type="button"
-                  onClick={() => { setLeaderboardMode("industry"); setDrilldownLabel(null); setExpandedTheme(null); }}
+                  onClick={() => {
+                    setLeaderboardMode("industry");
+                    setDrilldownLabel(null);
+                    setExpandedTheme(null);
+                    setIndustrySubSpotlight(null);
+                  }}
                   className={`rounded-full px-3 py-1.5 text-[11px] font-semibold transition-colors ${
                     leaderboardMode === "industry" ? "bg-accent/20 text-white" : "text-slate-400 hover:text-white"
                   }`}
@@ -2216,11 +2398,25 @@ const ScannerView = memo(function ScannerView({
                           const qRatio = Number.isFinite(industry.relativeStrengthQualifierRatio) ? industry.relativeStrengthQualifierRatio : null;
                           const adr = getIndustryAdr(industry);
                           
+                          const subSelected =
+                            industrySubSpotlight?.theme === industry.theme &&
+                            industrySubSpotlight?.parent === group.category;
                           return (
                             <tr
                               key={`industry-${industry.theme}`}
-                              className="cursor-pointer border-b border-terminal-border/60 hover:bg-terminal-elevated/40"
-                              onClick={() => setSpotlightThemeName(industry.theme)}
+                              className={`cursor-pointer border-b border-terminal-border/60 hover:bg-terminal-elevated/40 ${
+                                subSelected ? "bg-accent/15 ring-1 ring-inset ring-accent/35" : ""
+                              }`}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSpotlightThemeName(industry.theme);
+                                setIndustrySubSpotlight({
+                                  parent: group.category,
+                                  theme: industry.theme,
+                                  relativeStrength1M: industry.relativeStrength1M,
+                                  leaders: industry.leaders ?? [],
+                                });
+                              }}
                             >
                               <td className="px-3 py-2 text-right font-mono tabular-nums text-slate-600">
                                 {groupIdx + 1}.{idx + 1}
@@ -2280,7 +2476,10 @@ const ScannerView = memo(function ScannerView({
                           className={`cursor-pointer border-b border-terminal-border/60 hover:bg-terminal-elevated/40 ${
                             spotlightTheme?.theme === t.theme ? "bg-terminal-elevated/30" : ""
                           }`}
-                          onClick={() => setSpotlightThemeName(t.theme)}
+                          onClick={() => {
+                            setIndustrySubSpotlight(null);
+                            setSpotlightThemeName(t.theme);
+                          }}
                           title="Click to spotlight"
                         >
                           <td className="px-3 py-2 text-right font-mono tabular-nums text-slate-500">{rankNumber}</td>

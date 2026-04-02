@@ -15,6 +15,7 @@ import math
 import random
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from statistics import mean, median
 from typing import Any
 
@@ -971,6 +972,106 @@ async def fetch_finviz_industry_filter_map() -> dict[str, str]:
             continue
         out[_normalize_group_name(text)] = ind
     return out
+
+
+def _yf_ticker_close_and_change_pct(tickers: list[str]) -> list[dict[str, Any]]:
+    """Last daily close and session % change vs prior close (yfinance)."""
+    rows: list[dict[str, Any]] = []
+    for t in tickers:
+        try:
+            tk = yf.Ticker(t)
+            hist = tk.history(period="5d", interval="1d")
+            if hist is None or hist.empty or len(hist) < 2:
+                continue
+            close = float(hist["Close"].iloc[-1])
+            prev = float(hist["Close"].iloc[-2])
+            if prev == 0:
+                continue
+            ret = ((close - prev) / prev) * 100.0
+            rows.append({"ticker": t, "close": round(close, 2), "change_pct": round(ret, 2)})
+        except Exception:
+            continue
+    return rows
+
+
+async def fetch_industry_subindustry_movers(
+    industry_display_name: str,
+    *,
+    max_tickers: int = 48,
+    max_pages: int = 3,
+) -> dict[str, Any]:
+    """
+    Resolve Finviz industry → screener tickers, then yfinance 1D % change + last close.
+    Returns top 3 gainers, top 3 losers (by 1D %), and the remaining names.
+    """
+    now = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    name = (industry_display_name or "").strip()
+    if not name:
+        return {
+            "ok": False,
+            "industry": "",
+            "detail": "Missing industry name.",
+            "top_gainers": [],
+            "top_losers": [],
+            "rest": [],
+            "fetched_at_utc": now,
+        }
+
+    ind_map = await fetch_finviz_industry_filter_map()
+    ind_token = ind_map.get(_normalize_group_name(name))
+    if not ind_token:
+        return {
+            "ok": False,
+            "industry": name,
+            "detail": "Industry not found in Finviz filter map.",
+            "top_gainers": [],
+            "top_losers": [],
+            "rest": [],
+            "fetched_at_utc": now,
+        }
+
+    path = f"/screener.ashx?v=111&f={ind_token}&o=-volume"
+    tickers = await fetch_finviz_tickers_deterministic(path, max_pages=max_pages)
+    tickers = [str(x).strip().upper() for x in tickers if str(x).strip()][:max_tickers]
+    if not tickers:
+        return {
+            "ok": True,
+            "industry": name,
+            "detail": None,
+            "top_gainers": [],
+            "top_losers": [],
+            "rest": [],
+            "fetched_at_utc": now,
+        }
+
+    snapshots = await asyncio.to_thread(_yf_ticker_close_and_change_pct, tickers)
+    if not snapshots:
+        return {
+            "ok": True,
+            "industry": name,
+            "detail": "No price snapshots (yfinance).",
+            "top_gainers": [],
+            "top_losers": [],
+            "rest": [],
+            "fetched_at_utc": now,
+        }
+
+    ordered = sorted(snapshots, key=lambda r: r["change_pct"], reverse=True)
+    gainers = ordered[:3]
+    losers_sorted = sorted(ordered[-3:], key=lambda r: r["change_pct"])
+    used = {r["ticker"] for r in gainers} | {r["ticker"] for r in losers_sorted}
+    rest = [r for r in ordered if r["ticker"] not in used]
+    rest.sort(key=lambda r: r["change_pct"], reverse=True)
+
+    return {
+        "ok": True,
+        "industry": name,
+        "detail": None,
+        "top_gainers": gainers,
+        "top_losers": losers_sorted,
+        "rest": rest,
+        "fetched_at_utc": now,
+    }
 
 
 def _finviz_col_index(headers_text: list[str], *candidates: str) -> int | None:

@@ -769,6 +769,19 @@ async def get_market_ocean() -> dict:
     return result
 
 
+@app.get("/api/industry/subindustry-movers")
+async def get_industry_subindustry_movers(industry: str, parent: str | None = None) -> dict:
+    """
+    Finviz industry screener → tickers; yfinance 1D % change + last close.
+    Used by the dashboard Thematic Spotlight when a sub-industry row is selected.
+    """
+    try:
+        from backend.big_movers_server import get_subindustry_movers_payload
+    except ImportError:
+        from big_movers_server import get_subindustry_movers_payload
+    return await get_subindustry_movers_payload(industry, parent)
+
+
 @app.get("/api/theme-universe/spotlight")
 async def get_theme_spotlight(label: str) -> dict:
     clean_label = unquote(label).strip()
