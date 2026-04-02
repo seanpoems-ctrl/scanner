@@ -1871,7 +1871,8 @@ const ScannerView = memo(function ScannerView({
       }
     });
 
-    return result;
+    // Never render accordion parents with zero children (avoids empty Uncategorized / Discretionary headers)
+    return result.filter((g) => g.industries.length > 0);
   }, [finvizFilteredRows, leaderboardMode, sortKey, sortDir]);
   const sortedLeaderboardRows = useMemo(() => {
     if (!sortKey) return finvizFilteredRows;
