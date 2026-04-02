@@ -142,6 +142,8 @@ INDUSTRY_THEME_MAP: dict[str, str] = {
     "REIT - Industrial": "Financials — Real Estate",
     "REIT - Specialty": "Financials — Real Estate",
     "REIT - Healthcare Facilities": "Financials — Real Estate",
+    "REIT - Mortgage": "Financials — Real Estate",
+    "REIT - Hotel & Motel": "Financials — Real Estate",
     # Consumer
     "Internet Retail": "Consumer — E-Commerce",
     "Specialty Retail": "Consumer — Retail",
