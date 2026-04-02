@@ -631,20 +631,39 @@ function useFdvLeaderboard(view: "themes" | "industry") {
     async function load() {
       try {
         setLoading(true);
-        const res = await fetch(`${API_BASE_URL}/api/themes?view=${encodeURIComponent(view)}`);
-        if (!res.ok) {
-          if (res.status === 429) {
-            if (!active) return;
-            setError("finviz 429 — rate limited, retrying in 20 s…");
-            retryTimer = setTimeout(() => { if (active) setRetryAt(Date.now()); }, 20_000);
-            return;
+
+        // Try static JSON file first (written by local_pusher_static.py via Vercel CDN).
+        // This completely bypasses Render's IP blocking issues.
+        let data: ApiPayload | null = null;
+        try {
+          const staticRes = await fetch(`/leaderboard-${view}.json?t=${Date.now()}`);
+          if (staticRes.ok) {
+            const staticData = (await staticRes.json()) as ApiPayload;
+            if (staticData.themes?.length) {
+              data = staticData;
+            }
           }
-          throw new Error(`HTTP ${res.status}`);
+        } catch {
+          // static file not available — fall through to Render API
         }
-        const data = (await res.json()) as ApiPayload;
+
+        // Fall back to Render API if static file not available or empty.
+        if (!data) {
+          const res = await fetch(`${API_BASE_URL}/api/themes?view=${encodeURIComponent(view)}`);
+          if (!res.ok) {
+            if (res.status === 429) {
+              if (!active) return;
+              setError("finviz 429 — rate limited, retrying in 20 s…");
+              retryTimer = setTimeout(() => { if (active) setRetryAt(Date.now()); }, 20_000);
+              return;
+            }
+            throw new Error(`HTTP ${res.status}`);
+          }
+          data = (await res.json()) as ApiPayload;
+        }
+
         if (!active) return;
         if (!data.themes?.length) {
-          // Backend warmed up but Finviz returned empty — retry in 15 s.
           setError(null);
           setPayload(data);
           retryTimer = setTimeout(() => { if (active) setRetryAt(Date.now()); }, 15_000);
