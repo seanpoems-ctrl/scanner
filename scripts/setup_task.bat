@@ -9,7 +9,7 @@ REM  Usage:  Right-click → "Run as administrator"
 REM ─────────────────────────────────────────────────────────────────────────
 
 SET TASK_NAME=PowerTheme_LocalPusher
-SET BAT_PATH=c:\Users\arabi\.cursor\Project 3\scripts\run_pusher.bat
+SET BAT_PATH=c:\Users\arabi\.cursor\Project 3\scripts\push_static.bat
 
 REM Delete any existing task with the same name (safe to run repeatedly).
 schtasks /delete /tn "%TASK_NAME%" /f 2>nul
