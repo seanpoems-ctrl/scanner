@@ -782,6 +782,19 @@ async def get_industry_subindustry_movers(industry: str, parent: str | None = No
     return await get_subindustry_movers_payload(industry, parent)
 
 
+@app.get("/api/themes/finviz-movers")
+async def get_finviz_theme_movers(slug: str, label: str | None = None) -> dict:
+    """
+    Finviz Themes map slug → `f=themes_{slug}` screener tickers; yfinance 1D % change + last close.
+    Used when a Themes leaderboard row is selected (same movers panel as industry sub-spotlight).
+    """
+    try:
+        from backend.big_movers_server import get_finviz_theme_movers_payload
+    except ImportError:
+        from big_movers_server import get_finviz_theme_movers_payload
+    return await get_finviz_theme_movers_payload(slug, label)
+
+
 @app.get("/api/theme-universe/spotlight")
 async def get_theme_spotlight(label: str) -> dict:
     clean_label = unquote(label).strip()

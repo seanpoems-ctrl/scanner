@@ -29,3 +29,24 @@ async def get_subindustry_movers_payload(industry_raw: str, parent_raw: str | No
     data = await _fetch(industry)
     data["parent_category"] = parent
     return data
+
+
+async def get_finviz_theme_movers_payload(slug_raw: str, label_raw: str | None) -> dict[str, Any]:
+    slug = unquote(slug_raw or "").strip()
+    if slug.startswith(" - "):
+        slug = slug[3:].strip()
+    label: str | None = None
+    if label_raw is not None and str(label_raw).strip():
+        label = unquote(str(label_raw)).strip()
+        if label.startswith(" - "):
+            label = label[3:].strip()
+        label = label or None
+
+    try:
+        from backend.scraper import fetch_finviz_theme_map_movers as _fetch
+    except ImportError:
+        from scraper import fetch_finviz_theme_map_movers as _fetch
+
+    data = await _fetch(slug, display_label=label)
+    data["parent_category"] = "Finviz Theme"
+    return data

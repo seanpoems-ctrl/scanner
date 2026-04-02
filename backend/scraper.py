@@ -1074,6 +1074,75 @@ async def fetch_industry_subindustry_movers(
     }
 
 
+async def fetch_finviz_theme_map_movers(
+    theme_slug: str,
+    *,
+    display_label: str | None = None,
+    max_tickers: int = 48,
+    max_pages: int = 3,
+) -> dict[str, Any]:
+    """
+    Finviz Themes map slug → screener `f=themes_{slug}` tickers, then yfinance 1D % + close.
+    Same payload shape as fetch_industry_subindustry_movers for the dashboard.
+    """
+    now = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    slug = (theme_slug or "").strip().lower()
+    label = (display_label or "").strip() or slug
+    if not slug:
+        return {
+            "ok": False,
+            "industry": label,
+            "detail": "Missing theme slug.",
+            "top_gainers": [],
+            "top_losers": [],
+            "rest": [],
+            "fetched_at_utc": now,
+        }
+
+    path = f"/screener.ashx?v=111&f=themes_{slug}&o=-volume"
+    tickers = await fetch_finviz_tickers_deterministic(path, max_pages=max_pages)
+    tickers = [str(x).strip().upper() for x in tickers if str(x).strip()][:max_tickers]
+    if not tickers:
+        return {
+            "ok": True,
+            "industry": label,
+            "detail": None,
+            "top_gainers": [],
+            "top_losers": [],
+            "rest": [],
+            "fetched_at_utc": now,
+        }
+
+    snapshots = await asyncio.to_thread(_yf_ticker_close_and_change_pct, tickers)
+    if not snapshots:
+        return {
+            "ok": True,
+            "industry": label,
+            "detail": "No price snapshots (yfinance).",
+            "top_gainers": [],
+            "top_losers": [],
+            "rest": [],
+            "fetched_at_utc": now,
+        }
+
+    ordered = sorted(snapshots, key=lambda r: r["change_pct"], reverse=True)
+    gainers = ordered[:3]
+    losers_sorted = sorted(ordered[-3:], key=lambda r: r["change_pct"])
+    used = {r["ticker"] for r in gainers} | {r["ticker"] for r in losers_sorted}
+    rest = [r for r in ordered if r["ticker"] not in used]
+    rest.sort(key=lambda r: r["change_pct"], reverse=True)
+
+    return {
+        "ok": True,
+        "industry": label,
+        "detail": None,
+        "top_gainers": gainers,
+        "top_losers": losers_sorted,
+        "rest": rest,
+        "fetched_at_utc": now,
+    }
+
+
 def _finviz_col_index(headers_text: list[str], *candidates: str) -> int | None:
     """First column whose header contains any candidate substring (lowercased)."""
     for i, h in enumerate(headers_text):
@@ -1355,6 +1424,7 @@ def _series_theme_dict(
     perf1m: float | None = None,
     perf3m: float | None,
     perf6m: float | None,
+    perf_ytd: float | None = None,
     total_count: int,
     theme_dollar_volume: float,
 ) -> dict[str, Any]:
@@ -1367,6 +1437,7 @@ def _series_theme_dict(
         "perf1M": None if perf1m is None else round(perf1m, 2),
         "perf3M": None if perf3m is None else round(perf3m, 2),
         "perf6M": None if perf6m is None else round(perf6m, 2),
+        "perfYTD": None if perf_ytd is None else round(perf_ytd, 2),
         "relativeStrengthQualifierRatio": 0.0,
         "leaders": [],
         "qualifiedCount": 0,
@@ -1441,11 +1512,13 @@ async def build_finviz_industry_leaderboard_rows() -> list[dict[str, Any]]:
     pm_ov    = _find_col(h1, "perf month", "month", "1m")
     pq_ov    = _find_col(h1, "perf quart", "quarter", "3m", "quart")
     ph_ov    = _find_col(h1, "perf half", "half", "6m")
+    pytd_ov  = _find_col(h1, "perf ytd", "ytd")
 
     pw2 = _find_col(h2, "perf week",  "week",    "1w", "perf 1w")  if perf_ok else None
     pm2 = _find_col(h2, "perf month", "month",   "1m", "perf 1m") if perf_ok else None
     pq2 = _find_col(h2, "perf quart", "quarter", "3m", "quart")   if perf_ok else None
     ph2 = _find_col(h2, "perf half",  "half",    "6m", "perf 6m") if perf_ok else None
+    pytd2 = _find_col(h2, "perf ytd", "ytd") if perf_ok else None
     ch2_i = _find_col(h2, "change", "chg", "1d")                   if perf_ok else None
 
     def _pct_cell(cells: list[str], idx: int | None) -> float | None:
@@ -1484,6 +1557,7 @@ async def build_finviz_industry_leaderboard_rows() -> list[dict[str, Any]]:
             "pm_ov": _pct_cell(cells, pm_ov),
             "pq_ov": _pct_cell(cells, pq_ov),
             "ph_ov": _pct_cell(cells, ph_ov),
+            "pytd_ov": _pct_cell(cells, pytd_ov),
         }
 
     perf_map: dict[str, dict[str, float | None]] = {}
@@ -1499,6 +1573,7 @@ async def build_finviz_industry_leaderboard_rows() -> list[dict[str, Any]]:
             "pm": _pct_cell(cells, pm2),
             "pq": _pct_cell(cells, pq2),
             "ph": _pct_cell(cells, ph2),
+            "pytd": _pct_cell(cells, pytd2),
             "ch": _pct_cell(cells, ch2_i),
         }
 
@@ -1512,6 +1587,7 @@ async def build_finviz_industry_leaderboard_rows() -> list[dict[str, Any]]:
         pm_val = p.get("pm") if p.get("pm") is not None else ov.get("pm_ov")
         perf3m = p.get("pq") if p.get("pq") is not None else ov.get("pq_ov")
         perf6m = p.get("ph") if p.get("ph") is not None else ov.get("ph_ov")
+        perf_ytd = p.get("pytd") if p.get("pytd") is not None else ov.get("pytd_ov")
         raw_name = ov["name"]
         thematic_label = _thematic_label_for_finviz_industry(raw_name)
         row = _series_theme_dict(
@@ -1523,6 +1599,7 @@ async def build_finviz_industry_leaderboard_rows() -> list[dict[str, Any]]:
             perf1m=pm_val,
             perf3m=perf3m,
             perf6m=perf6m,
+            perf_ytd=perf_ytd,
             total_count=int(ov.get("stocks", 0)),
             theme_dollar_volume=float(ov.get("themeDollarVolume", 0.0)),
         )
@@ -1598,7 +1675,7 @@ _THEMES_SEED_ROWS: list[dict[str, Any]] = [
     _series_theme_dict(theme=n, sector="Finviz Theme", rs1m=None, perf1d=None,
                        perf1w=None, perf1m=None, perf3m=None, perf6m=None,
                        total_count=0, theme_dollar_volume=0.0)
-    | {"seed": True}
+    | {"seed": True, "finvizThemeSlug": None}
     for n in [
         "AI · Artificial Intelligence",
         "Cybersecurity",
@@ -1650,20 +1727,20 @@ async def build_finviz_themes_map_rows() -> list[dict[str, Any]]:
         w1_v, w13_v, w26_v = pick(w1, slug), pick(w13, slug), pick(w26, slug)
         perf1d_v = round(d1_v, 2) if d1_v is not None else None
         rs1m = w4_v if w4_v is not None else d1_v
-        themes.append(
-            _series_theme_dict(
-                theme=label,
-                sector="Finviz Theme",
-                rs1m=rs1m,
-                perf1d=perf1d_v,
-                perf1w=w1_v,
-                perf1m=w4_v,
-                perf3m=w13_v,
-                perf6m=w26_v,
-                total_count=0,
-                theme_dollar_volume=0.0,
-            )
+        row = _series_theme_dict(
+            theme=label,
+            sector="Finviz Theme",
+            rs1m=rs1m,
+            perf1d=perf1d_v,
+            perf1w=w1_v,
+            perf1m=w4_v,
+            perf3m=w13_v,
+            perf6m=w26_v,
+            total_count=0,
+            theme_dollar_volume=0.0,
         )
+        row["finvizThemeSlug"] = str(slug)
+        themes.append(row)
     themes.sort(
         key=lambda x: (
             x["relativeStrength1M"] is not None,
@@ -2240,6 +2317,7 @@ async def _build_leaderboard_screener_audit(
                 "perf1M": None if rs_score_1m is None else round(rs_score_1m, 2),
                 "perf3M": None if perf_3m is None else round(perf_3m, 2),
                 "perf6M": None if perf_6m is None else round(perf_6m, 2),
+                "perfYTD": None,
                 "relativeStrengthQualifierRatio": qualifier_ratio,
                 "leaders": [m.ticker for m in leaders_for_display[:5]],
                 "qualifiedCount": len(qualifying_for_display),
@@ -2311,6 +2389,7 @@ async def _build_leaderboard_screener_audit(
                     "perf1M": None,
                     "perf3M": None,
                     "perf6M": None,
+                    "perfYTD": None,
                     "relativeStrengthQualifierRatio": round(
                         (len([s for s in chunk if s.qualifies_grade_a]) / len(chunk)) * 100, 2
                     ),
