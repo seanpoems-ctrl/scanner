@@ -69,9 +69,14 @@ FINVIZ_INDUSTRY_OVERVIEW_URL = f"{FINVIZ_BASE_URL}/groups.ashx?g=industry&v=110&
 # v=210 uses a different table structure that our BeautifulSoup parser can't read.
 FINVIZ_INDUSTRY_PERF_URL = f"{FINVIZ_BASE_URL}/groups.ashx?g=industry&v=140&o=name&st=d1"
 
+
+def _normalize_group_name(name: str) -> str:
+    return " ".join(name.lower().strip().split())
+
+
 # ---------------------------------------------------------------------------
-# Thematic label map  (Finviz industry name → "Elite Rubric" bucket)
-# Covers ~148 industries; unmapped names fall back to their parent sector.
+# Thematic label map  (Finviz industry name → "Elite Rubric" / Power Theme bucket)
+# Unmapped names yield empty thematicLabel → frontend shows "Uncategorized".
 # ---------------------------------------------------------------------------
 INDUSTRY_THEME_MAP: dict[str, str] = {
     # AI & Semiconductors
@@ -169,7 +174,94 @@ INDUSTRY_THEME_MAP: dict[str, str] = {
     "Utilities - Renewable": "Energy Transition",
     "Utilities - Diversified": "Utilities",
     "Utilities - Independent Power Producers": "Utilities",
+    # --- Extended coverage (Finviz names that previously fell through) ---
+    "Auto & Truck Dealerships": "Consumer — Autos",
+    "Advertising Agencies": "Consumer — Marketing & Media",
+    "Electronic Gaming & Multimedia": "Digital Entertainment",
+    "Broadcasting": "Media & Telecom",
+    "Publishing": "Media & Publishing",
+    "Entertainment": "Digital Entertainment",
+    "Telecom Services": "Media & Telecom",
+    "Shell Companies": "Capital Markets — SPACs",
+    "Real Estate Services": "Financials — Real Estate",
+    "Real Estate - Development": "Financials — Real Estate",
+    "Real Estate - Diversified": "Financials — Real Estate",
+    "REIT - Diversified": "Financials — Real Estate",
+    "Residential Construction": "Housing & Construction",
+    "Engineering & Construction": "Housing & Construction",
+    "Building Materials": "Industrials — Building",
+    "Building Products & Equipment": "Industrials — Building",
+    "Consulting Services": "Business Services",
+    "Specialty Business Services": "Business Services",
+    "Education & Training Services": "Education & Services",
+    "Rental & Leasing Services": "Business Services",
+    "Personal Services": "Consumer — Services",
+    "Pollution & Treatment Controls": "Clean Energy / Infrastructure",
+    "Infrastructure Operations": "Clean Energy / Infrastructure",
+    "Insurance Brokers": "Financials — Insurance",
+    "Beverages - Brewers": "Consumer — Staples",
+    "Beverages - Wineries & Distilleries": "Consumer — Staples",
+    "Packaged Foods": "Consumer — Staples",
+    "Confectioners": "Consumer — Staples",
+    "Grocery Stores": "Consumer — Staples",
+    "Food Distribution": "Consumer — Staples",
+    "Tobacco": "Consumer — Staples",
+    "Household & Personal Products": "Consumer — Staples",
+    "Farm Products": "Agriculture & AgriTech",
+    "Agricultural Inputs": "Agriculture & AgriTech",
+    "Chemicals": "Industrials — Chemicals",
+    "Specialty Chemicals": "Industrials — Chemicals",
+    "Paper & Paper Products": "Industrials — Materials",
+    "Packaging & Containers": "Industrials — Materials",
+    "Lumber & Wood Production": "Industrials — Materials",
+    "Scientific & Technical Instruments": "Industrials — Precision",
+    "Industrial Distribution": "Industrials",
+    "Discount Stores": "Consumer — Retail",
+    "Apparel Manufacturing": "Consumer — Discretionary",
+    "Textile Manufacturing": "Consumer — Discretionary",
+    "Consumer Electronics": "Consumer — Discretionary",
+    "Furnishings, Fixtures & Appliances": "Consumer — Discretionary",
+    "Recreational Vehicles": "Consumer — Autos",
+    "Lodging": "Consumer — Travel",
+    "Integrated Freight & Logistics": "Industrials — Logistics",
+    "Railroads": "Industrials — Logistics",
+    "Marine Shipping": "Industrials — Logistics",
+    "Trucking": "Industrials — Logistics",
+    "Air Freight & Logistics": "Industrials — Logistics",
+    "Other Precious Metals & Mining": "Energy — Commodities",
+    "Coking Coal": "Energy — Commodities",
+    "Conglomerates": "Industrials",
+    "Financial Conglomerates": "Financials — Asset Management",
+    "Luxury Goods": "Consumer — Discretionary",
+    "Business Equipment & Supplies": "Industrials",
+    "Medical Distribution": "Healthcare Services",
+    "Utilities - Regulated Water": "Utilities",
+    "Beverages - Non-Alcoholic": "Consumer — Staples",
+    "Movies & Entertainment": "Digital Entertainment",
+    "Music & Entertainment": "Digital Entertainment",
+    "General Entertainment": "Digital Entertainment",
+    "Diversified Consumer Services": "Consumer — Services",
+    "Diversified Financial Services": "Financials — FinTech",
+    "Diversified Industrials": "Industrials",
+    "Electronics - Consumer": "Consumer — Discretionary",
+    "Data Storage": "Cloud & Cyber",
+    "Information Storage Services": "Cloud & Cyber",
 }
+
+
+_INDUSTRY_THEME_LABEL_BY_NORM: dict[str, str] = {
+    _normalize_group_name(k): v for k, v in INDUSTRY_THEME_MAP.items()
+}
+
+
+def _thematic_label_for_finviz_industry(raw_name: str) -> str:
+    """Map Finviz industry row name → Power Theme; exact match then normalized key."""
+    s = (raw_name or "").strip()
+    if not s:
+        return ""
+    if s in INDUSTRY_THEME_MAP:
+        return INDUSTRY_THEME_MAP[s]
+    return _INDUSTRY_THEME_LABEL_BY_NORM.get(_normalize_group_name(s), "")
 
 
 def get_industry_theme_map() -> dict[str, str]:
@@ -339,10 +431,6 @@ def _parse_compact_number(raw: str) -> float:
 def _parse_percent(raw: str) -> float:
     cleaned = raw.strip().replace("%", "").replace(",", "")
     return float(cleaned) if cleaned else 0.0
-
-
-def _normalize_group_name(name: str) -> str:
-    return " ".join(name.lower().strip().split())
 
 
 def _safe_fast_info_value(info: Any, key: str) -> Any:
@@ -1190,7 +1278,7 @@ def _series_theme_dict(
 _INDUSTRY_SEED_ROWS: list[dict[str, Any]] = [
     _series_theme_dict(theme=n, sector="Industry", rs1m=None, perf1d=None, perf1w=None,
                        perf1m=None, perf3m=None, perf6m=None, total_count=0, theme_dollar_volume=0.0)
-    | {"thematicLabel": INDUSTRY_THEME_MAP.get(n, ""), "seed": True}
+    | {"thematicLabel": _thematic_label_for_finviz_industry(n), "seed": True}
     for n in [
         "Semiconductors", "Software - Application", "Software - Infrastructure",
         "Biotechnology", "Aerospace & Defense", "Solar", "Oil & Gas E&P",
@@ -1318,7 +1406,7 @@ async def build_finviz_industry_leaderboard_rows() -> list[dict[str, Any]]:
         perf3m = p.get("pq") if p.get("pq") is not None else ov.get("pq_ov")
         perf6m = p.get("ph") if p.get("ph") is not None else ov.get("ph_ov")
         raw_name = ov["name"]
-        thematic_label = INDUSTRY_THEME_MAP.get(raw_name, "")
+        thematic_label = _thematic_label_for_finviz_industry(raw_name)
         row = _series_theme_dict(
             theme=raw_name,
             sector="Industry",
