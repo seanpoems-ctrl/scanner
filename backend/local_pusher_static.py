@@ -59,10 +59,21 @@ async def run() -> None:
 
     now_iso = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
+    import inspect
+
+    def _is_async(fn) -> bool:
+        return inspect.iscoroutinefunction(fn)
+
+    async def _call(fn, *args):
+        """Call fn regardless of whether it is sync or async."""
+        if _is_async(fn):
+            return await fn(*args)
+        return await asyncio.to_thread(fn, *args)
+
     # ── 1. Themes ─────────────────────────────────────────────────────────────
     log.info("Scraping Finviz Themes map…")
     try:
-        theme_rows = await asyncio.to_thread(build_finviz_themes_map_rows)
+        theme_rows = await _call(build_finviz_themes_map_rows)
         live_themes = [r for r in theme_rows if not r.get("seed")]
         log.info("Themes: %d live rows scraped.", len(live_themes))
     except Exception as e:
@@ -74,7 +85,7 @@ async def run() -> None:
     # ── 2. Industry ───────────────────────────────────────────────────────────
     log.info("Scraping Finviz Industry groups…")
     try:
-        industry_rows = await asyncio.to_thread(build_finviz_industry_leaderboard_rows)
+        industry_rows = await _call(build_finviz_industry_leaderboard_rows)
         live_industry = [r for r in industry_rows if not r.get("seed")]
         log.info("Industry: %d live rows scraped.", len(live_industry))
     except Exception as e:
@@ -85,7 +96,7 @@ async def run() -> None:
 
     # ── 3. VIX tape (optional enrichment) ─────────────────────────────────────
     try:
-        tape = await asyncio.to_thread(fetch_tradingview_tape)
+        tape = await _call(fetch_tradingview_tape)
     except Exception:
         tape = {}
 
