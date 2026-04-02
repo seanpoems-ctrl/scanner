@@ -1,0 +1,23 @@
+{
+  "updated_at_utc": "2024-01-15T10:00:00Z",
+  "themes": [
+    {
+      "slug": "software-infrastructure",
+      "label": "Software - Infrastructure",
+      "bucket": "Technology",
+      "tickers": ["MSFT", "GOOGL", "AMZN", "CRM", "NOW"],
+      "source": null,
+      "notes": "Manually added",
+      "updated_at_utc": "2024-01-15T10:00:00Z"
+    },
+    {
+      "slug": "renewable-energy",
+      "label": "Renewable Energy",
+      "bucket": "Energy",
+      "tickers": ["TSLA", "ENPH", "SEDG", "FSLR", "NEE"],
+      "source": null,
+      "notes": "Manually added",
+      "updated_at_utc": "2024-01-15T10:00:00Z"
+    }
+  ]
+}
