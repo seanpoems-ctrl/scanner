@@ -4,10 +4,16 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-import exchange_calendars as xcals
+try:
+    import exchange_calendars as xcals
+    XNYS = xcals.get_calendar("XNYS")
+    _XCALS_OK = True
+except Exception:
+    xcals = None  # type: ignore[assignment]
+    XNYS = None   # type: ignore[assignment]
+    _XCALS_OK = False
 
 NY_TZ = ZoneInfo("America/New_York")
-XNYS = xcals.get_calendar("XNYS")
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,6 +42,8 @@ def is_nyse_trading_day_et(dt: datetime) -> bool:
     """True if XNYS has a session for the ET date."""
     dt_et = dt.astimezone(NY_TZ)
     d = dt_et.date()
+    if not _XCALS_OK or XNYS is None:
+        return d.weekday() < 5  # Mon–Fri fallback
     # exchange_calendars expects session label as string YYYY-MM-DD
     return XNYS.is_session(str(d))
 
@@ -44,7 +52,10 @@ def market_status(now_utc: datetime | None = None) -> MarketStatus:
     now = now_utc or datetime.now(timezone.utc).replace(microsecond=0)
     now_et = now.astimezone(NY_TZ)
     d = now_et.date()
-    is_td = XNYS.is_session(str(d))
+    if _XCALS_OK and XNYS is not None:
+        is_td = XNYS.is_session(str(d))
+    else:
+        is_td = d.weekday() < 5
 
     # Pre-market scanner window start (ET). ZoneInfo("America/New_York") automatically
     # shifts between EST/EDT with DST.
@@ -72,6 +83,8 @@ def market_status(now_utc: datetime | None = None) -> MarketStatus:
     next_open = None
     next_close = None
     try:
+        if not _XCALS_OK or XNYS is None:
+            raise RuntimeError("exchange_calendars unavailable")
         # Use exchange calendar for upcoming open/close timestamps.
         # Convert now to UTC for schedule lookup.
         now_u = _to_utc(now)
