@@ -1,4 +1,4 @@
-import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type JSX } from "react";
+import React, { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type JSX } from "react";
 import { AlertTriangle, BarChart2, Info, LayoutGrid, Moon, Plus, Search, Sunrise } from "lucide-react";
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import MarketBreadth from "./MarketBreadth";
@@ -38,6 +38,9 @@ type ApiTheme = {
   theme: string;
   sector?: string;
   thematicLabel?: string;
+  category?: string;
+  adr?: number | null;
+  adr_pct?: number | null;
   seed?: boolean;
   relativeStrength1M: number | null;
   perf1D?: number | null;
@@ -56,6 +59,22 @@ type ApiTheme = {
   accumulation: boolean;
   stocks: ApiStock[];
 };
+
+type ThemeIndustryRow = ApiTheme & {
+  category?: string | null;
+  adr?: number | null;
+  adr_pct?: number | null;
+};
+
+function getIndustryCategory(row: ThemeIndustryRow): string {
+  return (row.category ?? row.thematicLabel ?? row.sector ?? row.theme ?? "Uncategorized").trim() || "Uncategorized";
+}
+
+function getIndustryAdr(row: ThemeIndustryRow): number | null {
+  const raw = row.adr ?? row.adr_pct;
+  if (raw == null || !Number.isFinite(raw)) return null;
+  return raw;
+}
 
 type ApiPayload = {
   vix: { symbol: string; close: number; change_pct: number };
@@ -1711,6 +1730,8 @@ const ScannerView = memo(function ScannerView({
   const [leaderboardMode, setLeaderboardMode] = useState<"themes" | "industry">("themes");
   // drilldownLabel: when set (industry mode only), filter rows to this thematic bucket.
   const [drilldownLabel, setDrilldownLabel] = useState<string | null>(null);
+  // expandedTheme: for accordion-style industry grouping
+  const [expandedTheme, setExpandedTheme] = useState<string | null>(null);
   const now_et_h = new Date().toLocaleString("en-US", { timeZone: "America/New_York", hour: "numeric", hour12: false });
   const [briefMode, setBriefMode] = useState<"pre" | "post">(Number(now_et_h) < 17 ? "pre" : "post");
   const [sortKey, setSortKey] = useState<
@@ -1732,6 +1753,11 @@ const ScannerView = memo(function ScannerView({
     return sortedThemes.filter((t) => t.theme.toLowerCase().includes(q) || (t.sector ?? "").toLowerCase().includes(q));
   }, [sortedThemes, themeQuery]);
 
+  // Reset accordion state when switching modes or drill-down changes
+  useEffect(() => {
+    setExpandedTheme(null);
+  }, [leaderboardMode, drilldownLabel]);
+
   const { payload: finvizLeaderboardPayload, loading: finvizLbLoading, error: finvizLbError } = useFdvLeaderboard(leaderboardMode);
   const finvizRows = finvizLeaderboardPayload?.themes ?? [];
   const finvizFilteredRows = useMemo(() => {
@@ -1745,9 +1771,54 @@ const ScannerView = memo(function ScannerView({
     return rows.filter((t) =>
       t.theme.toLowerCase().includes(q) ||
       (t.sector ?? "").toLowerCase().includes(q) ||
-      (t.thematicLabel ?? "").toLowerCase().includes(q)
+      (t.thematicLabel ?? "").toLowerCase().includes(q) ||
+      getIndustryCategory(t).toLowerCase().includes(q)
     );
   }, [finvizRows, themeQuery, leaderboardMode, drilldownLabel]);
+
+  // Group industries by category for accordion view
+  const groupedThemes = useMemo(() => {
+    if (leaderboardMode !== "industry") return [];
+    
+    const groups = new Map<string, ThemeIndustryRow[]>();
+    
+    finvizFilteredRows.forEach((row) => {
+      const category = getIndustryCategory(row);
+      if (!groups.has(category)) {
+        groups.set(category, []);
+      }
+      groups.get(category)!.push(row);
+    });
+
+    // Convert to array and sort each group's industries by 1W performance
+    const result = Array.from(groups.entries()).map(([category, industries]) => {
+      const sortedIndustries = [...industries].sort((a, b) => {
+        const perfA = a.perf1W ?? -Infinity;
+        const perfB = b.perf1W ?? -Infinity;
+        return perfB - perfA; // Descending order
+      });
+
+      // Get the top performance for the group
+      const topPerf1W = sortedIndustries[0]?.perf1W ?? null;
+      const topPerf1WClass = topPerf1W != null ? pctClass(topPerf1W) : "text-slate-500";
+
+      return {
+        category,
+        industries: sortedIndustries,
+        topPerf1W,
+        topPerf1WClass
+      };
+    });
+
+    // Sort groups by their top performance (descending)
+    result.sort((a, b) => {
+      const perfA = a.topPerf1W ?? -Infinity;
+      const perfB = b.topPerf1W ?? -Infinity;
+      return perfB - perfA;
+    });
+
+    return result;
+  }, [finvizFilteredRows, leaderboardMode]);
   const sortedLeaderboardRows = useMemo(() => {
     if (!sortKey) return finvizFilteredRows;
     const dir = sortDir === "asc" ? 1 : -1;
@@ -1937,7 +2008,7 @@ const ScannerView = memo(function ScannerView({
               ) : (
                 <p className="truncate text-[11px] text-slate-500">
                   {leaderboardMode === "industry"
-                    ? "Click a row to drill into its thematic bucket"
+                    ? "Click industry groups to expand/collapse sub-industries"
                     : "Theme performance + RS"}
                 </p>
               )}
@@ -1946,7 +2017,7 @@ const ScannerView = memo(function ScannerView({
               <div className="flex items-center gap-1 rounded-full border border-terminal-border bg-terminal-bg p-1">
                 <button
                   type="button"
-                  onClick={() => { setLeaderboardMode("themes"); setDrilldownLabel(null); }}
+                  onClick={() => { setLeaderboardMode("themes"); setDrilldownLabel(null); setExpandedTheme(null); }}
                   className={`rounded-full px-3 py-1.5 text-[11px] font-semibold transition-colors ${
                     leaderboardMode === "themes" ? "bg-accent/20 text-white" : "text-slate-400 hover:text-white"
                   }`}
@@ -1955,7 +2026,7 @@ const ScannerView = memo(function ScannerView({
                 </button>
                 <button
                   type="button"
-                  onClick={() => { setLeaderboardMode("industry"); setDrilldownLabel(null); }}
+                  onClick={() => { setLeaderboardMode("industry"); setDrilldownLabel(null); setExpandedTheme(null); }}
                   className={`rounded-full px-3 py-1.5 text-[11px] font-semibold transition-colors ${
                     leaderboardMode === "industry" ? "bg-accent/20 text-white" : "text-slate-400 hover:text-white"
                   }`}
@@ -2040,31 +2111,114 @@ const ScannerView = memo(function ScannerView({
                       </p>
                     </td>
                   </tr>
+                ) : leaderboardMode === "industry" ? (
+                  // Accordion-style industry grouping
+                  groupedThemes.map((group, groupIdx) => {
+                    const isOpen = expandedTheme === group.category;
+                    
+                    return (
+                      <React.Fragment key={`group-${group.category}`}>
+                        {/* Parent Category Row */}
+                        <tr
+                          className="cursor-pointer border-b border-terminal-border/60 bg-slate-800/30 hover:bg-slate-700/40"
+                          onClick={() => setExpandedTheme(isOpen ? null : group.category)}
+                        >
+                          <td className="px-3 py-3 text-right font-mono tabular-nums text-slate-500">{groupIdx + 1}</td>
+                          <td className="px-3 py-3">
+                            <div className="flex items-center gap-2">
+                              <span className={isOpen ? "rotate-90" : ""} style={{ transition: "transform 0.2s" }}>▶</span>
+                              <div className="min-w-0">
+                                <p className="truncate font-bold text-slate-100">{group.category}</p>
+                                <p className="truncate text-[10px] text-slate-500">
+                                  {group.industries.length} industries
+                                </p>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="px-3 py-3 text-right font-mono tabular-nums text-slate-600">—</td>
+                          <td className={`px-3 py-3 text-right font-mono tabular-nums ${group.topPerf1WClass}`}>
+                            {fmtPct(group.topPerf1W, 2)}
+                          </td>
+                          <td className="px-3 py-3 text-right font-mono tabular-nums text-slate-600">—</td>
+                          <td className="px-3 py-3 text-right font-mono tabular-nums text-slate-600">—</td>
+                          <td className="px-3 py-3 text-right font-mono tabular-nums text-slate-600">—</td>
+                          <td className="px-3 py-3 text-right font-mono tabular-nums text-slate-600">—</td>
+                          <td className="px-3 py-3 text-right font-mono tabular-nums text-slate-600">—</td>
+                          <td className="px-3 py-3 text-right font-mono text-slate-600">—</td>
+                        </tr>
+                        
+                        {/* Sub-Industries (when expanded) */}
+                        {isOpen && group.industries.map((industry, idx) => {
+                          const rs = industry.relativeStrength1M ?? null;
+                          const qRatio = Number.isFinite(industry.relativeStrengthQualifierRatio) ? industry.relativeStrengthQualifierRatio : null;
+                          const adr = getIndustryAdr(industry);
+                          
+                          return (
+                            <tr
+                              key={`industry-${industry.theme}`}
+                              className="cursor-pointer border-b border-terminal-border/60 hover:bg-terminal-elevated/40"
+                              onClick={() => setSpotlightThemeName(industry.theme)}
+                            >
+                              <td className="px-3 py-2 text-right font-mono tabular-nums text-slate-600">
+                                {groupIdx + 1}.{idx + 1}
+                              </td>
+                              <td className="px-3 py-2 pl-8">
+                                <div className="min-w-0 border-l border-slate-700 pl-4">
+                                  <p className={`truncate font-medium ${industry.seed ? "text-slate-500 italic" : "text-slate-200"}`}>
+                                    {industry.theme}
+                                    {industry.seed && (
+                                      <span className="ml-1.5 rounded bg-slate-800 px-1 py-px font-mono text-[8px] not-italic text-slate-600">
+                                        awaiting data
+                                      </span>
+                                    )}
+                                  </p>
+                                  <p className="truncate text-[10px] text-slate-600">
+                                    <span className={industry.perf1W != null ? pctClass(industry.perf1W) : "text-slate-600"}>
+                                      {fmtPct(industry.perf1W, 2)}
+                                    </span>
+                                    {adr != null && ` (${adr.toFixed(1)}%)`}
+                                  </p>
+                                </div>
+                              </td>
+                              {[industry.perf1D, industry.perf1W, industry.perf1M, industry.perf3M, industry.perf6M].map((v, i) => (
+                                <td
+                                  key={i}
+                                  className={`px-3 py-2 text-right font-mono tabular-nums ${
+                                    v == null || !Number.isFinite(v) ? "text-slate-600" : pctClass(v)
+                                  }`}
+                                >
+                                  {fmtPct(v, 2)}
+                                </td>
+                              ))}
+                              <td className="px-3 py-2 text-right font-mono tabular-nums text-slate-300">
+                                {rs == null || !Number.isFinite(rs) ? "—" : rs.toFixed(1)}
+                              </td>
+                              <td className="px-3 py-2 text-right font-mono tabular-nums text-slate-300">
+                                {qRatio == null ? "—" : `${(qRatio * 100).toFixed(0)}%`}
+                              </td>
+                              <td className="px-3 py-2 text-right font-mono text-slate-400">{(industry.leaders ?? []).slice(0, 4).join(", ") || "—"}</td>
+                            </tr>
+                          );
+                        })}
+                      </React.Fragment>
+                    );
+                  })
                 ) : (
+                  // Themes mode - flat table
                   sortedLeaderboardRows.slice(0, 160).map((t, idx) => {
                       const displayedCount = Math.min(160, sortedLeaderboardRows.length);
                       const rankNumber = sortDir === "asc" ? displayedCount - idx : idx + 1;
                       const rs = t.relativeStrength1M ?? null;
                       const qRatio = Number.isFinite(t.relativeStrengthQualifierRatio) ? t.relativeStrengthQualifierRatio : null;
-                      // In industry mode (not drilled in): clicking drills into the thematic bucket.
-                      // When drilled in, or in themes mode: clicking spotlights the row.
-                      const canDrillDown =
-                        leaderboardMode === "industry" && !drilldownLabel && !!t.thematicLabel;
-                      const handleRowClick = () => {
-                        if (canDrillDown) {
-                          setDrilldownLabel(t.thematicLabel!);
-                        } else {
-                          setSpotlightThemeName(t.theme);
-                        }
-                      };
+                      
                       return (
                         <tr
                           key={`${leaderboardMode}:${t.theme}|${t.sector ?? ""}`}
                           className={`cursor-pointer border-b border-terminal-border/60 hover:bg-terminal-elevated/40 ${
                             spotlightTheme?.theme === t.theme ? "bg-terminal-elevated/30" : ""
                           }`}
-                          onClick={handleRowClick}
-                          title={canDrillDown ? `Drill into ${t.thematicLabel}` : "Click to spotlight"}
+                          onClick={() => setSpotlightThemeName(t.theme)}
+                          title="Click to spotlight"
                         >
                           <td className="px-3 py-2 text-right font-mono tabular-nums text-slate-500">{rankNumber}</td>
                           <td className="px-3 py-2">
@@ -2079,12 +2233,6 @@ const ScannerView = memo(function ScannerView({
                               </p>
                               <p className="flex flex-wrap items-center gap-x-1.5 truncate text-[10px] text-slate-600">
                                 {t.qualifiedCount}/{t.totalCount} · {t.sector ?? "—"} · {formatMoney(t.themeDollarVolume)}
-                                {/* Thematic bucket pill — only in industry mode */}
-                                {leaderboardMode === "industry" && t.thematicLabel && (
-                                  <span className="inline-block rounded bg-accent/10 px-1 py-px font-semibold text-accent/80">
-                                    {t.thematicLabel}
-                                  </span>
-                                )}
                               </p>
                             </div>
                           </td>
