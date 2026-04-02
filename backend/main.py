@@ -19,64 +19,89 @@ _PUSH_SECRET = os.environ.get("PUSH_SECRET", "").strip()
 
 from yfinance.exceptions import YFRateLimitError
 
-try:
-    # Local package-style imports (used in local dev from repo root).
-    from backend.breadth import compute_market_ocean_sync, OceanSnapshot
-    from backend.market_intelligence import generate_and_save as intel_generate_and_save, load_brief as intel_load_brief
-    from backend.market_scheduler import start_scheduler, stop_scheduler
-    from backend.premarket_tv import PremarketTvParams, run_premarket_tv_scan_sync
-    from backend.scraper import (
-        build_theme_leaderboard,
-        extract_us_ticker_from_tv_scan_row,
-        fetch_finviz_industry_filter_map,
-        fetch_finviz_short_float_pct_batch,
-        fetch_yfinance_short_percent_float_pct_batch,
-        fetch_tradingview_tape,
-        get_industry_theme_map,
-        FINVIZ_INDUSTRY_OVERVIEW_URL,
-        FINVIZ_INDUSTRY_PERF_URL,
-        BROWSER_HEADERS,
-    )
-    from backend.theme_universe import ThemeUniverseStore, scheduled_refresh_loop
-    from backend.news_brief import (
-        PremarketBriefStore,
-        scheduled_premarket_loop,
-        generate_premarket_brief,
-        PostmarketBriefStore,
-        scheduled_postmarket_loop,
-        generate_postmarket_brief,
-    )
-    from backend.market_time import is_nyse_trading_day_et, market_status_dict
-    from backend.earnings import EarningsCache, next_earnings_for_tickers
-except ModuleNotFoundError:
-    # Render may run with cwd at /backend, where absolute `backend.*` is unavailable.
-    from premarket_tv import PremarketTvParams, run_premarket_tv_scan_sync
-    from scraper import (
-        build_theme_leaderboard,
-        extract_us_ticker_from_tv_scan_row,
-        fetch_finviz_industry_filter_map,
-        fetch_finviz_short_float_pct_batch,
-        fetch_yfinance_short_percent_float_pct_batch,
-        fetch_tradingview_tape,
-        get_industry_theme_map,
-        FINVIZ_INDUSTRY_OVERVIEW_URL,
-        FINVIZ_INDUSTRY_PERF_URL,
-        BROWSER_HEADERS,
-    )
-    from theme_universe import ThemeUniverseStore, scheduled_refresh_loop
-    from news_brief import (
-        PremarketBriefStore,
-        scheduled_premarket_loop,
-        generate_premarket_brief,
-        PostmarketBriefStore,
-        scheduled_postmarket_loop,
-        generate_postmarket_brief,
-    )
-    from breadth import compute_market_ocean_sync, OceanSnapshot
-    from market_intelligence import generate_and_save as intel_generate_and_save, load_brief as intel_load_brief
-    from market_scheduler import start_scheduler, stop_scheduler
-    from market_time import is_nyse_trading_day_et, market_status_dict
-    from earnings import EarningsCache, next_earnings_for_tickers
+import traceback as _tb
+_IMPORT_ERRORS: list[str] = []
+
+def _try_import_local():
+    global compute_market_ocean_sync, OceanSnapshot, intel_generate_and_save, intel_load_brief
+    global start_scheduler, stop_scheduler, PremarketTvParams, run_premarket_tv_scan_sync
+    global build_theme_leaderboard, extract_us_ticker_from_tv_scan_row
+    global fetch_finviz_industry_filter_map, fetch_finviz_short_float_pct_batch
+    global fetch_yfinance_short_percent_float_pct_batch, fetch_tradingview_tape
+    global get_industry_theme_map, FINVIZ_INDUSTRY_OVERVIEW_URL, FINVIZ_INDUSTRY_PERF_URL, BROWSER_HEADERS
+    global ThemeUniverseStore, scheduled_refresh_loop
+    global PremarketBriefStore, scheduled_premarket_loop, generate_premarket_brief
+    global PostmarketBriefStore, scheduled_postmarket_loop, generate_postmarket_brief
+    global is_nyse_trading_day_et, market_status_dict, EarningsCache, next_earnings_for_tickers
+
+    # Try package-style first (local dev), then flat (Render /backend cwd).
+    for prefix in ("backend.", ""):
+        try:
+            _b = __import__(f"{prefix}breadth", fromlist=["compute_market_ocean_sync", "OceanSnapshot"])
+            compute_market_ocean_sync = _b.compute_market_ocean_sync
+            OceanSnapshot = _b.OceanSnapshot
+
+            _mi = __import__(f"{prefix}market_intelligence", fromlist=["generate_and_save", "load_brief"])
+            intel_generate_and_save = _mi.generate_and_save
+            intel_load_brief = _mi.load_brief
+
+            _ms = __import__(f"{prefix}market_scheduler", fromlist=["start_scheduler", "stop_scheduler"])
+            start_scheduler = _ms.start_scheduler
+            stop_scheduler = _ms.stop_scheduler
+
+            _pt = __import__(f"{prefix}premarket_tv", fromlist=["PremarketTvParams", "run_premarket_tv_scan_sync"])
+            PremarketTvParams = _pt.PremarketTvParams
+            run_premarket_tv_scan_sync = _pt.run_premarket_tv_scan_sync
+
+            _sc = __import__(f"{prefix}scraper", fromlist=[
+                "build_theme_leaderboard", "extract_us_ticker_from_tv_scan_row",
+                "fetch_finviz_industry_filter_map", "fetch_finviz_short_float_pct_batch",
+                "fetch_yfinance_short_percent_float_pct_batch", "fetch_tradingview_tape",
+                "get_industry_theme_map", "FINVIZ_INDUSTRY_OVERVIEW_URL",
+                "FINVIZ_INDUSTRY_PERF_URL", "BROWSER_HEADERS",
+            ])
+            build_theme_leaderboard = _sc.build_theme_leaderboard
+            extract_us_ticker_from_tv_scan_row = _sc.extract_us_ticker_from_tv_scan_row
+            fetch_finviz_industry_filter_map = _sc.fetch_finviz_industry_filter_map
+            fetch_finviz_short_float_pct_batch = _sc.fetch_finviz_short_float_pct_batch
+            fetch_yfinance_short_percent_float_pct_batch = _sc.fetch_yfinance_short_percent_float_pct_batch
+            fetch_tradingview_tape = _sc.fetch_tradingview_tape
+            get_industry_theme_map = _sc.get_industry_theme_map
+            FINVIZ_INDUSTRY_OVERVIEW_URL = _sc.FINVIZ_INDUSTRY_OVERVIEW_URL
+            FINVIZ_INDUSTRY_PERF_URL = _sc.FINVIZ_INDUSTRY_PERF_URL
+            BROWSER_HEADERS = _sc.BROWSER_HEADERS
+
+            _tu = __import__(f"{prefix}theme_universe", fromlist=["ThemeUniverseStore", "scheduled_refresh_loop"])
+            ThemeUniverseStore = _tu.ThemeUniverseStore
+            scheduled_refresh_loop = _tu.scheduled_refresh_loop
+
+            _nb = __import__(f"{prefix}news_brief", fromlist=[
+                "PremarketBriefStore", "scheduled_premarket_loop", "generate_premarket_brief",
+                "PostmarketBriefStore", "scheduled_postmarket_loop", "generate_postmarket_brief",
+            ])
+            PremarketBriefStore = _nb.PremarketBriefStore
+            scheduled_premarket_loop = _nb.scheduled_premarket_loop
+            generate_premarket_brief = _nb.generate_premarket_brief
+            PostmarketBriefStore = _nb.PostmarketBriefStore
+            scheduled_postmarket_loop = _nb.scheduled_postmarket_loop
+            generate_postmarket_brief = _nb.generate_postmarket_brief
+
+            _mt = __import__(f"{prefix}market_time", fromlist=["is_nyse_trading_day_et", "market_status_dict"])
+            is_nyse_trading_day_et = _mt.is_nyse_trading_day_et
+            market_status_dict = _mt.market_status_dict
+
+            _ea = __import__(f"{prefix}earnings", fromlist=["EarningsCache", "next_earnings_for_tickers"])
+            EarningsCache = _ea.EarningsCache
+            next_earnings_for_tickers = _ea.next_earnings_for_tickers
+
+            return  # success
+        except Exception as _e:
+            _IMPORT_ERRORS.append(f"prefix={prefix!r}: {type(_e).__name__}: {_e}\n{_tb.format_exc()}")
+            continue
+
+    raise RuntimeError(f"All import attempts failed:\n" + "\n---\n".join(_IMPORT_ERRORS))
+
+_try_import_local()
 
 import yfinance as yf
 
@@ -222,6 +247,17 @@ def _on_upstream_ok(now: float) -> None:
         _POLL_SEC = max(_POLL_BASE_SEC, _POLL_SEC * 0.5)
 
 app = FastAPI(title="POWER-THEME API", version="0.1.0")
+
+
+@app.get("/api/startup-diagnostics")
+def startup_diagnostics():
+    """Returns import errors captured at startup — use to diagnose Render crashes."""
+    return {
+        "ok": len(_IMPORT_ERRORS) == 0,
+        "errors": _IMPORT_ERRORS,
+        "python_version": os.sys.version,
+    }
+
 
 # Vite may use 5173, 5174, … if the default port is busy — allow any local dev origin.
 app.add_middleware(
