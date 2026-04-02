@@ -134,6 +134,8 @@ INDUSTRY_THEME_MAP: dict[str, str] = {
     "Insurance - Life": "Financials — Insurance",
     "Insurance - Property & Casualty": "Financials — Insurance",
     "Insurance - Diversified": "Financials — Insurance",
+    "Insurance - Specialty": "Financials — Insurance",
+    "Insurance - Reinsurance": "Financials — Insurance",
     "Financial Data & Stock Exchanges": "Financials — FinTech",
     "Mortgage Finance": "Financials — Real Estate",
     "REIT - Residential": "Financials — Real Estate",
