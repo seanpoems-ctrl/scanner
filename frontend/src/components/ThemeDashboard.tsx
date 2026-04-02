@@ -1790,35 +1790,89 @@ const ScannerView = memo(function ScannerView({
       groups.get(category)!.push(row);
     });
 
-    // Convert to array and sort each group's industries by 1W performance
+    // Convert to array and sort each group's industries by the selected column
     const result = Array.from(groups.entries()).map(([category, industries]) => {
-      const sortedIndustries = [...industries].sort((a, b) => {
-        const perfA = a.perf1W ?? -Infinity;
-        const perfB = b.perf1W ?? -Infinity;
-        return perfB - perfA; // Descending order
-      });
+      const sortedIndustries = [...industries];
+      
+      // Sort sub-industries by the selected sort key
+      if (sortKey) {
+        const dir = sortDir === "asc" ? 1 : -1;
+        const num = (n: number | null | undefined) => (n == null || !Number.isFinite(n) ? Number.NEGATIVE_INFINITY : n);
+        
+        sortedIndustries.sort((a, b) => {
+          if (sortKey === "theme") return a.theme.localeCompare(b.theme) * dir;
+          if (sortKey === "perf1D") return (num(a.perf1D) - num(b.perf1D)) * dir;
+          if (sortKey === "perf1W") return (num(a.perf1W) - num(b.perf1W)) * dir;
+          if (sortKey === "perf1M") return (num(a.perf1M) - num(b.perf1M)) * dir;
+          if (sortKey === "perf3M") return (num(a.perf3M) - num(b.perf3M)) * dir;
+          if (sortKey === "perf6M") return (num(a.perf6M) - num(b.perf6M)) * dir;
+          if (sortKey === "rs1m") return (num(a.relativeStrength1M) - num(b.relativeStrength1M)) * dir;
+          if (sortKey === "qual") return (num(a.relativeStrengthQualifierRatio) - num(b.relativeStrengthQualifierRatio)) * dir;
+          return 0;
+        });
+      } else {
+        // Default sort by 1W performance (descending)
+        sortedIndustries.sort((a, b) => {
+          const perfA = a.perf1W ?? -Infinity;
+          const perfB = b.perf1W ?? -Infinity;
+          return perfB - perfA;
+        });
+      }
 
-      // Get the top performance for the group
-      const topPerf1W = sortedIndustries[0]?.perf1W ?? null;
-      const topPerf1WClass = topPerf1W != null ? pctClass(topPerf1W) : "text-slate-500";
+      // Calculate aggregate performance for the parent row
+      const validIndustries = industries.filter(i => !i.seed);
+      const avgPerf1D = validIndustries.length > 0 ? validIndustries.reduce((sum, i) => sum + (i.perf1D ?? 0), 0) / validIndustries.length : null;
+      const avgPerf1W = validIndustries.length > 0 ? validIndustries.reduce((sum, i) => sum + (i.perf1W ?? 0), 0) / validIndustries.length : null;
+      const avgPerf1M = validIndustries.length > 0 ? validIndustries.reduce((sum, i) => sum + (i.perf1M ?? 0), 0) / validIndustries.length : null;
+      const avgPerf3M = validIndustries.length > 0 ? validIndustries.reduce((sum, i) => sum + (i.perf3M ?? 0), 0) / validIndustries.length : null;
+      const avgPerf6M = validIndustries.length > 0 ? validIndustries.reduce((sum, i) => sum + (i.perf6M ?? 0), 0) / validIndustries.length : null;
+      const avgRS = validIndustries.length > 0 ? validIndustries.reduce((sum, i) => sum + (i.relativeStrength1M ?? 0), 0) / validIndustries.length : null;
+      const avgQual = validIndustries.length > 0 ? validIndustries.reduce((sum, i) => sum + (i.relativeStrengthQualifierRatio ?? 0), 0) / validIndustries.length : null;
 
       return {
         category,
         industries: sortedIndustries,
-        topPerf1W,
-        topPerf1WClass
+        avgPerf1D,
+        avgPerf1W,
+        avgPerf1M,
+        avgPerf3M,
+        avgPerf6M,
+        avgRS,
+        avgQual
       };
     });
 
-    // Sort groups by their top performance (descending)
+    // Sort groups by the selected sort key, or default to 1W performance
+    const sortByKey = sortKey || "perf1W";
+    const dir = sortDir === "asc" ? 1 : -1;
+    
     result.sort((a, b) => {
-      const perfA = a.topPerf1W ?? -Infinity;
-      const perfB = b.topPerf1W ?? -Infinity;
-      return perfB - perfA;
+      const getValue = (group: typeof result[0]) => {
+        switch (sortByKey) {
+          case "theme": return group.category;
+          case "perf1D": return group.avgPerf1D ?? -Infinity;
+          case "perf1W": return group.avgPerf1W ?? -Infinity;
+          case "perf1M": return group.avgPerf1M ?? -Infinity;
+          case "perf3M": return group.avgPerf3M ?? -Infinity;
+          case "perf6M": return group.avgPerf6M ?? -Infinity;
+          case "rs1m": return group.avgRS ?? -Infinity;
+          case "qual": return group.avgQual ?? -Infinity;
+          default: return group.avgPerf1W ?? -Infinity;
+        }
+      };
+      
+      const valueA = getValue(a);
+      const valueB = getValue(b);
+      
+      if (typeof valueA === "string" && typeof valueB === "string") {
+        return valueA.localeCompare(valueB) * dir;
+      } else {
+        return (Number(valueB) - Number(valueA)) * dir;
+      }
     });
 
     return result;
-  }, [finvizFilteredRows, leaderboardMode]);
+  }, [finvizFilteredRows, leaderboardMode, sortKey, sortDir]);
   const sortedLeaderboardRows = useMemo(() => {
     if (!sortKey) return finvizFilteredRows;
     const dir = sortDir === "asc" ? 1 : -1;
@@ -2135,15 +2189,23 @@ const ScannerView = memo(function ScannerView({
                               </div>
                             </div>
                           </td>
-                          <td className="px-3 py-3 text-right font-mono tabular-nums text-slate-600">—</td>
-                          <td className={`px-3 py-3 text-right font-mono tabular-nums ${group.topPerf1WClass}`}>
-                            {fmtPct(group.topPerf1W, 2)}
+                          {/* Performance columns - show averages */}
+                          {[group.avgPerf1D, group.avgPerf1W, group.avgPerf1M, group.avgPerf3M, group.avgPerf6M].map((v, i) => (
+                            <td
+                              key={i}
+                              className={`px-3 py-3 text-right font-mono tabular-nums font-bold ${
+                                v == null || !Number.isFinite(v) ? "text-slate-600" : pctClass(v)
+                              }`}
+                            >
+                              {fmtPct(v, 1)}
+                            </td>
+                          ))}
+                          <td className="px-3 py-3 text-right font-mono tabular-nums font-bold text-slate-300">
+                            {group.avgRS == null || !Number.isFinite(group.avgRS) ? "—" : group.avgRS.toFixed(1)}
                           </td>
-                          <td className="px-3 py-3 text-right font-mono tabular-nums text-slate-600">—</td>
-                          <td className="px-3 py-3 text-right font-mono tabular-nums text-slate-600">—</td>
-                          <td className="px-3 py-3 text-right font-mono tabular-nums text-slate-600">—</td>
-                          <td className="px-3 py-3 text-right font-mono tabular-nums text-slate-600">—</td>
-                          <td className="px-3 py-3 text-right font-mono tabular-nums text-slate-600">—</td>
+                          <td className="px-3 py-3 text-right font-mono tabular-nums font-bold text-slate-300">
+                            {group.avgQual == null ? "—" : `${(group.avgQual * 100).toFixed(0)}%`}
+                          </td>
                           <td className="px-3 py-3 text-right font-mono text-slate-600">—</td>
                         </tr>
                         
