@@ -3,6 +3,7 @@ uvicorn[standard]
 beautifulsoup4
 yfinance
 httpx
+numpy
 pandas>=2.0
 exchange-calendars>=4.5
 wordninja>=2.0.0
