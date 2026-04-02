@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 import re
+from urllib.parse import unquote
 from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import Any
@@ -770,9 +771,22 @@ async def get_market_ocean() -> dict:
 
 @app.get("/api/theme-universe/spotlight")
 async def get_theme_spotlight(label: str) -> dict:
-    theme = await _THEME_UNIVERSE.find_by_label(label)
+    clean_label = unquote(label).strip()
+    if clean_label.startswith(" - "):
+        clean_label = clean_label[3:].strip()
+    
+    theme = await _THEME_UNIVERSE.find_by_label(clean_label)
     if theme is None:
-        raise HTTPException(status_code=404, detail="Theme not found in theme_universe.json")
+        # Return graceful fallback instead of 404
+        return {
+            "label": clean_label,
+            "slug": clean_label.lower().replace(" ", "-"),
+            "updated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+            "best": [],
+            "worst": [],
+            "note": "Theme not found in curated universe - showing empty spotlight"
+        }
+    
     cached = await _THEME_UNIVERSE.get_cached_movers(theme)
     return cached or await _THEME_UNIVERSE.refresh_movers(theme)
 

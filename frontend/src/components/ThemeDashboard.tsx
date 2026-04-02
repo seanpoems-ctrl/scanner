@@ -1661,7 +1661,8 @@ function useUniverseSpotlight(label: string | null) {
     }
     let active = true;
     setLoading(true);
-    fetch(`${API_BASE_URL}/api/theme-universe/spotlight?label=${encodeURIComponent(label)}`)
+    const themeName = (label ?? "").trim();
+    fetch(`${API_BASE_URL}/api/theme-universe/spotlight?label=${encodeURIComponent(themeName)}`)
       .then(async (r) => {
         if (!r.ok) throw new Error(`spotlight ${r.status}`);
         return (await r.json()) as ThemeUniverseSpotlight;
