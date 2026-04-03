@@ -1,15 +1,18 @@
 import React, { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type JSX } from "react";
-import { AlertTriangle, BarChart2, BarChart3, Info, LayoutGrid, Moon, Plus, Search, Sunrise } from "lucide-react";
+import { AlertTriangle, BarChart2, BarChart3, Info, LayoutGrid, ListPlus, Moon, Plus, Search, Star, Sunrise } from "lucide-react";
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import MarketBreadth from "./MarketBreadth";
+import { useWatchlist } from "../hooks/useWatchlist";
+import { API_BASE_URL } from "../lib/apiBase";
 import { formatMoney, fmtPct, fmtPrice, pctClass } from "../lib/formatters";
+import { RotationView } from "./RotationView";
+import { WatchlistDrawer } from "./WatchlistDrawer";
 import { ImpactBadge } from "./ui/ImpactBadge";
 import { ErrorBanner } from "./ui/ErrorBanner";
 import { EmptyState } from "./ui/EmptyState";
 import { PanelLoading, SkeletonRows } from "./ui/SkeletonRows";
 import { RefreshRow } from "./ui/RefreshRow";
 
-const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim() || "http://127.0.0.1:8000";
 const THEMES_CACHE_KEY = "power-theme:themes-cache:v1";
 const MIN_AUTO_REFRESH_MS = 10 * 60_000;
 
@@ -1824,6 +1827,9 @@ const ScannerView = memo(function ScannerView({
   intelPost,
   intelLoading,
   onRefreshIntel,
+  watchlisted,
+  onToggleWatchlist,
+  onSelectTicker,
 }: {
   payload: ApiPayload;
   spotlightThemeName: string | null;
@@ -1834,6 +1840,9 @@ const ScannerView = memo(function ScannerView({
   intelPost: IntelBrief | null;
   intelLoading: boolean;
   onRefreshIntel: (t: "pre" | "post") => void;
+  watchlisted: Set<string>;
+  onToggleWatchlist: (ticker: string, ctx?: { theme?: string; sector?: string; grade?: string }) => void | Promise<void>;
+  onSelectTicker: (ticker: string, meta?: TickerDrawerMeta) => void;
 }) {
   const [leaderboardMode, setLeaderboardMode] = useState<"themes" | "industry">("themes");
   // drilldownLabel: when set (industry mode only), filter rows to this thematic bucket.
@@ -2292,17 +2301,43 @@ const ScannerView = memo(function ScannerView({
                   Leaders: <span className="font-mono text-slate-300">{(spotlightTheme.leaders ?? []).slice(0, 6).join(", ") || "—"}</span>
                 </p>
                 <div className="mt-3 grid grid-cols-2 gap-2">
-                  {(uniSpotlight?.best ?? []).slice(0, 4).map((x) => (
-                    <div key={`b-${x.ticker}`} className="rounded-lg border border-terminal-border bg-terminal-bg/40 px-2.5 py-2">
-                      <div className="flex items-baseline justify-between gap-2">
-                        <span className="font-mono text-[12px] font-semibold text-accent">{x.ticker}</span>
-                        <span className={`t-mono ${pctClass(x.today_return_pct)}`}>
-                          {x.today_return_pct >= 0 ? "+" : ""}
-                          {x.today_return_pct.toFixed(2)}%
-                        </span>
+                  {(uniSpotlight?.best ?? []).slice(0, 4).map((x) => {
+                    const symU = String(x.ticker || "").toUpperCase();
+                    const onList = symU && watchlisted.has(symU);
+                    return (
+                      <div key={`b-${x.ticker}`} className="rounded-lg border border-terminal-border bg-terminal-bg/40 px-2.5 py-2">
+                        <div className="flex items-baseline justify-between gap-2">
+                          <div className="flex min-w-0 items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => onSelectTicker(symU, { theme: spotlightTheme?.theme, sector: spotlightTheme?.sector })}
+                              className="truncate font-mono text-[12px] font-semibold text-accent hover:underline"
+                            >
+                              {x.ticker}
+                            </button>
+                            <button
+                              type="button"
+                              title={onList ? "Remove from watchlist" : "Add to watchlist"}
+                              aria-label={onList ? "Remove from watchlist" : "Add to watchlist"}
+                              onClick={() =>
+                                void onToggleWatchlist(symU, {
+                                  theme: spotlightTheme?.theme,
+                                  sector: spotlightTheme?.sector,
+                                })
+                              }
+                              className="shrink-0 rounded p-0.5 text-slate-500 hover:bg-terminal-elevated/60 hover:text-amber-300"
+                            >
+                              <Star className={`h-3 w-3 ${onList ? "fill-amber-400 text-amber-400" : ""}`} strokeWidth={2} />
+                            </button>
+                          </div>
+                          <span className={`t-mono ${pctClass(x.today_return_pct)}`}>
+                            {x.today_return_pct >= 0 ? "+" : ""}
+                            {x.today_return_pct.toFixed(2)}%
+                          </span>
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                   {!(uniSpotlight?.best?.length) ? (
                     <div className="col-span-2 rounded-lg border border-terminal-border bg-terminal-bg/40 px-3 py-2 text-xs text-slate-500">
                       No mover data.
@@ -2326,24 +2361,62 @@ const ScannerView = memo(function ScannerView({
               <div className="grid grid-cols-2 gap-2">
                 {constituents.map((c) => {
                   const href = `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(`NASDAQ:${c.ticker}`)}`;
+                  const symU = String(c.ticker || "").toUpperCase();
+                  const onList = watchlisted.has(symU);
                   return (
-                    <a
+                    <div
                       key={c.ticker}
-                      href={href}
-                      target="_blank"
-                      rel="noopener noreferrer"
                       className="rounded-lg border border-terminal-border bg-terminal-bg/40 px-2.5 py-2 hover:border-slate-600"
                     >
-                      <div className="flex items-baseline justify-between gap-2">
-                        <span className="font-mono text-[12px] font-semibold text-accent">{c.ticker}</span>
-                        <span className="t-label">{c.grade}</span>
+                      <div className="flex items-baseline justify-between gap-1">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            onSelectTicker(symU, {
+                              theme: spotlightTheme?.theme,
+                              sector: spotlightTheme?.sector,
+                              grade: c.grade,
+                            })
+                          }
+                          className="truncate font-mono text-[12px] font-semibold text-accent hover:underline"
+                        >
+                          {c.ticker}
+                        </button>
+                        <div className="flex shrink-0 items-center gap-0.5">
+                          <button
+                            type="button"
+                            title={onList ? "Remove from watchlist" : "Add to watchlist"}
+                            aria-label={onList ? "Remove from watchlist" : "Add to watchlist"}
+                            onClick={() =>
+                              void onToggleWatchlist(symU, {
+                                theme: spotlightTheme?.theme,
+                                sector: spotlightTheme?.sector,
+                                grade: c.grade,
+                              })
+                            }
+                            className="rounded p-0.5 text-slate-500 hover:bg-terminal-elevated/50 hover:text-amber-300"
+                          >
+                            <Star className={`h-3.5 w-3.5 ${onList ? "fill-amber-400 text-amber-400" : ""}`} strokeWidth={2} />
+                          </button>
+                          <a
+                            href={href}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="rounded p-0.5 text-emerald-400 hover:bg-emerald-500/15"
+                            title="TradingView chart"
+                            aria-label={`Open ${c.ticker} on TradingView`}
+                          >
+                            <BarChart3 className="h-3.5 w-3.5" aria-hidden />
+                          </a>
+                        </div>
                       </div>
+                      <span className="t-label">{c.grade}</span>
                       <div className="mt-1 flex items-baseline justify-between gap-2">
                         <span className="t-mono text-slate-300">{fmtPrice(c.close)}</span>
                         <span className={`t-mono ${pctClass(c.today ?? 0)}`}>{fmtPct(c.today, 2)}</span>
                       </div>
                       <p className="mt-1 t-micro">ADDV {formatMoney(c.addv)}</p>
-                    </a>
+                    </div>
                   );
                 })}
               </div>
@@ -2712,6 +2785,8 @@ const GappersView = memo(function GappersView({
   setFilters,
   gapScannerGradeByTicker,
   onSelectTicker,
+  watchlisted,
+  onToggleWatchlist,
 }: {
   gappers: PremarketGappersPayload | null;
   loading: boolean;
@@ -2728,6 +2803,8 @@ const GappersView = memo(function GappersView({
   setFilters: (next: typeof filters) => void;
   gapScannerGradeByTicker: Map<string, "A" | "B" | "C">;
   onSelectTicker: (ticker: string, meta?: TickerDrawerMeta) => void;
+  watchlisted: Set<string>;
+  onToggleWatchlist: (ticker: string, ctx?: { theme?: string; sector?: string; grade?: string }) => void | Promise<void>;
 }) {
   const [sortKey, setSortKey] = useState<
     "ticker" | "premktPct" | "premktVol" | "dailyPct" | "adr" | "mcap" | "sector" | "industry" | "grade" | "setup"
@@ -2882,45 +2959,48 @@ const GappersView = memo(function GappersView({
               subtitle="Loosen your filters or click Refresh."
             />
           ) : (
-            <table className="w-full min-w-[1180px] border-separate border-spacing-0 text-left t-data">
+            <table className="w-full min-w-[1240px] border-separate border-spacing-0 text-left t-data">
               <caption className="sr-only">Pre-market gap scan results with sortable columns.</caption>
               <thead>
                 <tr>
-                  {(
-                    [
-                      { label: "Ticker", key: "ticker" },
-                      { label: "Premkt %", key: "premktPct" },
-                      { label: "Premkt Vol", key: "premktVol" },
-                      { label: "Daily %", key: "dailyPct" },
-                      { label: "ADR%", key: "adr" },
-                      { label: "MktCap", key: "mcap" },
-                      { label: "Setup", key: "setup" },
-                      { label: "Sector", key: "sector" },
-                      { label: "Industry", key: "industry" },
-                      { label: "Grade", key: "grade" },
-                    ] as const
-                  ).map((h) => (
+                  {[
+                    { label: "Ticker", key: "ticker" as const },
+                    { label: "Watch", key: null },
+                    { label: "Premkt %", key: "premktPct" as const },
+                    { label: "Premkt Vol", key: "premktVol" as const },
+                    { label: "Daily %", key: "dailyPct" as const },
+                    { label: "ADR%", key: "adr" as const },
+                    { label: "MktCap", key: "mcap" as const },
+                    { label: "Setup", key: "setup" as const },
+                    { label: "Sector", key: "sector" as const },
+                    { label: "Industry", key: "industry" as const },
+                    { label: "Grade", key: "grade" as const },
+                  ].map((h) => (
                     <th
                       key={h.label}
                       scope="col"
                       className="sticky top-0 z-10 whitespace-nowrap border-b border-terminal-border bg-terminal-card px-2 py-2 t-label"
                     >
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (sortKey === h.key) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
-                          else {
-                            setSortKey(h.key);
-                            setSortDir(h.key === "ticker" || h.key === "sector" || h.key === "industry" ? "asc" : "desc");
-                          }
-                        }}
-                        className="inline-flex w-full items-center gap-1 text-left hover:text-slate-300"
-                      >
+                      {h.key === null ? (
                         <span>{h.label}</span>
-                        <span className={`t-micro ${sortKey === h.key ? "text-accent" : "text-slate-600"}`}>
-                          {sortKey === h.key ? (sortDir === "asc" ? "▲" : "▼") : "↕"}
-                        </span>
-                      </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (sortKey === h.key) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+                            else {
+                              setSortKey(h.key);
+                              setSortDir(h.key === "ticker" || h.key === "sector" || h.key === "industry" ? "asc" : "desc");
+                            }
+                          }}
+                          className="inline-flex w-full items-center gap-1 text-left hover:text-slate-300"
+                        >
+                          <span>{h.label}</span>
+                          <span className={`t-micro ${sortKey === h.key ? "text-accent" : "text-slate-600"}`}>
+                            {sortKey === h.key ? (sortDir === "asc" ? "▲" : "▼") : "↕"}
+                          </span>
+                        </button>
+                      )}
                     </th>
                   ))}
                 </tr>
@@ -3022,6 +3102,29 @@ const GappersView = memo(function GappersView({
                           )}
                         </div>
                       </td>
+                      <td className="border-b border-terminal-border/60 px-1 py-2 text-center align-middle">
+                        {symUs ? (
+                          <button
+                            type="button"
+                            title={watchlisted.has(symUs.toUpperCase()) ? "Remove from watchlist" : "Add to watchlist"}
+                            aria-label={watchlisted.has(symUs.toUpperCase()) ? "Remove from watchlist" : "Add to watchlist"}
+                            onClick={() =>
+                              void onToggleWatchlist(symUs.toUpperCase(), {
+                                sector: sector === "—" ? undefined : sector,
+                                grade,
+                              })
+                            }
+                            className="inline-flex rounded-md p-1 text-slate-500 hover:bg-terminal-elevated/50 hover:text-amber-300"
+                          >
+                            <Star
+                              className={`h-4 w-4 ${watchlisted.has(symUs.toUpperCase()) ? "fill-amber-400 text-amber-400" : ""}`}
+                              strokeWidth={2}
+                            />
+                          </button>
+                        ) : (
+                          <span className="text-slate-700">—</span>
+                        )}
+                      </td>
                       <td className={`border-b border-terminal-border/60 px-2 py-2 text-center tabular-nums ${pctClass(pmGap ?? 0)}`}>
                         {gapFmtPctSigned(pmGap, 2)}
                       </td>
@@ -3059,9 +3162,22 @@ const GappersView = memo(function GappersView({
 });
 
 export function ThemeDashboard() {
-  const [tab, setTab] = useState<"scanner" | "gappers" | "breadth">("scanner");
+  const [tab, setTab] = useState<"scanner" | "gappers" | "breadth" | "rotation">("scanner");
   const [focusTicker, setFocusTicker] = useState<string | null>(null);
   const [focusTickerMeta, setFocusTickerMeta] = useState<TickerDrawerMeta | null>(null);
+  const [watchlistOpen, setWatchlistOpen] = useState(false);
+  const [watchActionErr, setWatchActionErr] = useState<string | null>(null);
+  const {
+    items: watchItems,
+    loading: watchLoading,
+    error: watchLoadError,
+    reload: reloadWatchlist,
+    watchlisted,
+    toggleTicker,
+    removeTicker,
+    updateNote,
+  } = useWatchlist();
+  const marketStatus = useMarketStatus();
   const { payload, error, reload: reloadThemes, lastUpdatedAt, loading, loadingSince, pollMs } = useThemesPayload();
   // Legacy RSS-based briefs kept alive for data continuity (not rendered in main UI).
   usePremarketBrief();
@@ -3146,17 +3262,34 @@ export function ThemeDashboard() {
     return m;
   }, [payload]);
 
+  const handleToggleWatchlist = useCallback(
+    async (ticker: string, ctx?: { theme?: string; sector?: string; grade?: string }) => {
+      try {
+        setWatchActionErr(null);
+        await toggleTicker(ticker, ctx);
+      } catch (e) {
+        setWatchActionErr(e instanceof Error ? e.message : "Watchlist update failed");
+      }
+    },
+    [toggleTicker]
+  );
+
   useEffect(() => {
-    if (!focusTicker) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
+      if (e.key !== "Escape") return;
+      if (watchlistOpen) {
+        setWatchlistOpen(false);
+        e.preventDefault();
+        return;
+      }
+      if (focusTicker) {
         setFocusTicker(null);
         setFocusTickerMeta(null);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [focusTicker]);
+  }, [focusTicker, watchlistOpen]);
 
   if (error && !payload) {
     const retryIn = Math.max(0, Math.round(pollMs / 1000));
@@ -3254,8 +3387,36 @@ export function ThemeDashboard() {
               <BarChart2 className="h-3.5 w-3.5" aria-hidden />
               Market Breadth
             </button>
+            <button
+              type="button"
+              onClick={() => setTab("rotation")}
+              aria-pressed={tab === "rotation"}
+              className={`flex items-center gap-1.5 rounded-full border px-4 py-2 t-data font-semibold transition-colors ${
+                tab === "rotation" ? "border-accent/40 bg-accent/20 text-white" : "border-terminal-border bg-terminal-bg text-slate-300 hover:border-slate-600 hover:text-white"
+              }`}
+            >
+              <BarChart3 className="h-3.5 w-3.5" aria-hidden />
+              Rotation
+            </button>
 
-            <div className="relative ml-auto">
+            <div className="ml-auto flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setWatchlistOpen((v) => !v)}
+              aria-expanded={watchlistOpen}
+              aria-controls="watchlist-drawer"
+              className={`flex items-center gap-1.5 rounded-full border px-3 py-2 t-data font-semibold transition-colors ${
+                watchlistOpen ? "border-accent/40 bg-accent/15 text-white" : "border-terminal-border bg-terminal-bg text-slate-300 hover:border-slate-600 hover:text-white"
+              }`}
+            >
+              <ListPlus className="h-3.5 w-3.5 shrink-0" aria-hidden />
+              <span className="hidden sm:inline">Watchlist</span>
+              {watchItems.length ? (
+                <span className="rounded-full bg-terminal-elevated px-1.5 py-px font-mono text-[10px] text-slate-300">{watchItems.length}</span>
+              ) : null}
+            </button>
+
+            <div className="relative">
               <div className="flex items-center gap-2 rounded-md border border-terminal-border bg-terminal-bg px-2 py-2">
                 <Search className="h-4 w-4 text-slate-500" aria-hidden />
                 <input
@@ -3371,8 +3532,15 @@ export function ThemeDashboard() {
                 </div>
               ) : null}
             </div>
+            </div>
           </div>
         </nav>
+
+        {watchActionErr ? (
+          <div className="shrink-0 border-b border-rose-900/40 bg-rose-950/35 px-4 py-2 text-center text-xs font-medium text-rose-200">
+            {watchActionErr}
+          </div>
+        ) : null}
 
         <main
           id="main-content"
@@ -3395,6 +3563,12 @@ export function ThemeDashboard() {
                     intelPost={intelPost}
                     intelLoading={intelBriefLoading}
                     onRefreshIntel={refreshIntel}
+                    watchlisted={watchlisted}
+                    onToggleWatchlist={handleToggleWatchlist}
+                    onSelectTicker={(t, meta) => {
+                      setFocusTicker(t);
+                      setFocusTickerMeta(meta ?? null);
+                    }}
                   />
                 ) : (
                   <div className="flex h-full items-center justify-center text-slate-500">Loading scanner…</div>
@@ -3402,6 +3576,8 @@ export function ThemeDashboard() {
               </div>
             ) : tab === "breadth" ? (
               <MarketBreadth />
+            ) : tab === "rotation" ? (
+              <RotationView />
             ) : (
               <GappersView
                 gappers={gappers}
@@ -3415,9 +3591,41 @@ export function ThemeDashboard() {
                   setFocusTicker(t);
                   setFocusTickerMeta(meta ?? null);
                 }}
+                watchlisted={watchlisted}
+                onToggleWatchlist={handleToggleWatchlist}
               />
             )}
           </div>
+          {watchlistOpen ? (
+            <WatchlistDrawer
+              onClose={() => setWatchlistOpen(false)}
+              marketStatus={marketStatus}
+              items={watchItems}
+              loading={watchLoading}
+              error={watchLoadError}
+              onReload={() => void reloadWatchlist()}
+              onRemove={async (t) => {
+                try {
+                  setWatchActionErr(null);
+                  await removeTicker(t);
+                } catch (e) {
+                  setWatchActionErr(e instanceof Error ? e.message : "Remove failed");
+                }
+              }}
+              onUpdateNote={async (t, n) => {
+                try {
+                  setWatchActionErr(null);
+                  await updateNote(t, n);
+                } catch (e) {
+                  setWatchActionErr(e instanceof Error ? e.message : "Note save failed");
+                }
+              }}
+              onSelectTicker={(t) => {
+                setFocusTicker(t);
+                setFocusTickerMeta(null);
+              }}
+            />
+          ) : null}
           {focusTicker ? (
             <TickerDrawer
               ticker={focusTicker}
