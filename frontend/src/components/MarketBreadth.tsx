@@ -3,8 +3,7 @@ import { BarChart3 } from "lucide-react";
 import MarketBreadthReport, { type MarketBreadthPayload } from "./MarketBreadthReport";
 import { ErrorBanner } from "./ui/ErrorBanner";
 import { RefreshRow } from "./ui/RefreshRow";
-
-const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim() || "http://127.0.0.1:8000";
+import { API_BASE_URL } from "../lib/apiBase";
 
 const MarketBreadth = memo(function MarketBreadth() {
   const [stockbee, setStockbee] = useState<MarketBreadthPayload | null>(null);
