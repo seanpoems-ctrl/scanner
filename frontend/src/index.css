@@ -1,5 +1,9 @@
 @import "tailwindcss";
 
+@theme {
+  --color-accent: #22d3ee;
+}
+
 :root {
   color-scheme: dark;
 }
@@ -24,6 +28,32 @@ body {
   box-sizing: border-box;
 }
 
+/* Keyboard focus — visible ring only for keyboard / focus-visible (not every mouse click). */
+@layer base {
+  :where(
+      button,
+      [href],
+      select,
+      textarea,
+      summary,
+      [tabindex]:not([tabindex="-1"])
+    ):focus-visible {
+    @apply outline outline-2 outline-offset-2 outline-accent;
+  }
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+
 .fintech-scroll {
   scrollbar-width: thin;
   scrollbar-color: rgba(148, 163, 184, 0.35) transparent;
@@ -41,4 +71,25 @@ body {
 
 .fintech-scroll::-webkit-scrollbar-track {
   background: transparent;
+}
+
+@layer components {
+  .t-page {
+    @apply text-sm font-semibold tracking-tight text-white;
+  }
+  .t-section {
+    @apply text-xs font-semibold uppercase tracking-wider text-slate-400;
+  }
+  .t-label {
+    @apply text-[11px] font-semibold uppercase tracking-wide text-slate-500;
+  }
+  .t-data {
+    @apply text-[11px] leading-relaxed text-slate-200;
+  }
+  .t-mono {
+    @apply font-mono text-[11px] tabular-nums;
+  }
+  .t-micro {
+    @apply text-[10px] leading-relaxed text-slate-600;
+  }
 }

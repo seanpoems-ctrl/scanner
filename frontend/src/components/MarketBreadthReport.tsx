@@ -1,5 +1,7 @@
 import { memo, useMemo } from "react";
 import { BarChart3, ExternalLink } from "lucide-react";
+import { ImpactBadge } from "./ui/ImpactBadge";
+import { PanelLoading } from "./ui/SkeletonRows";
 
 export type StockbeeRow = {
   date: string;
@@ -34,30 +36,6 @@ export type MarketBreadthPayload = {
   leading_themes?: LeadingThemeRow[];
   leading_themes_note?: string;
 };
-
-function ImpactBadge({ level }: { level: string }) {
-  const lv = (level || "").toLowerCase();
-  const styles = lv.includes("extreme") && !lv.includes("bullish")
-    ? "text-rose-500 font-black border-rose-500/50 bg-rose-500/10"
-    : lv.includes("overbought")
-    ? "text-purple-300 font-bold border-purple-400/50 bg-purple-500/10"
-    : lv === "high"
-    ? "text-orange-400 font-bold border-orange-400/50 bg-orange-400/10"
-    : lv.includes("bullish") || lv.includes("thrust")
-    ? "text-emerald-400 font-bold border-emerald-400/50 bg-emerald-400/10"
-    : lv.includes("oversold")
-    ? "text-orange-400 font-semibold border-orange-400/50 bg-orange-400/10"
-    : lv.includes("bearish")
-    ? "text-rose-400 font-bold border-rose-400/50 bg-rose-400/10"
-    : "text-amber-200 font-semibold border-amber-200/50 bg-amber-200/10";
-  return (
-    <span
-      className={`inline-block rounded border px-1.5 py-0.5 text-center text-[9px] uppercase tracking-widest ${styles}`}
-    >
-      {level || "—"}
-    </span>
-  );
-}
 
 function fmtN(n: number | null | undefined): string {
   if (n == null || !Number.isFinite(n)) return "—";
@@ -107,11 +85,7 @@ const MarketBreadthReport = memo(function MarketBreadthReport({ data }: { data: 
   }, [latest]);
 
   if (!data) {
-    return (
-      <div className="rounded-xl border border-gray-800 bg-[#0a0a0a] px-4 py-8 text-center text-sm text-slate-500">
-        Loading Stockbee monitor…
-      </div>
-    );
+    return <PanelLoading label="Loading Stockbee monitor…" />;
   }
 
   if (!data.ok && !data.rows?.length) {
@@ -134,13 +108,13 @@ const MarketBreadthReport = memo(function MarketBreadthReport({ data }: { data: 
   }
 
   return (
-    <div className="rounded-xl border border-gray-800 bg-[#0a0a0a]">
+    <div className="rounded-xl border border-gray-800 bg-terminal-bg">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-gray-800 px-4 py-3">
         <div className="flex items-center gap-2">
           <BarChart3 className="h-4 w-4 text-accent" aria-hidden />
           <div>
-            <h3 className="text-sm font-semibold text-white">Stockbee Market Monitor</h3>
-            <p className="text-[10px] text-slate-500">
+            <h3 className="t-page">Stockbee Market Monitor</h3>
+            <p className="t-micro text-slate-500">
               Sheet year {data.sheet_year ?? "—"} ·{" "}
               {data.fetched_at_utc
                 ? `Updated ${new Date(data.fetched_at_utc).toLocaleString()}`
@@ -154,7 +128,7 @@ const MarketBreadthReport = memo(function MarketBreadthReport({ data }: { data: 
               href={data.blog_url}
               target="_blank"
               rel="noopener noreferrer"
-              className="text-[10px] text-slate-500 hover:text-accent"
+              className="t-micro text-slate-500 hover:text-accent"
             >
               stockbee MM ↗
             </a>
@@ -165,25 +139,26 @@ const MarketBreadthReport = memo(function MarketBreadthReport({ data }: { data: 
       <div className="flex flex-col gap-4 p-4 lg:flex-row">
         {/* LEFT: table ~65% */}
         <div className="min-w-0 flex-[1_1_65%] overflow-x-auto">
-          <table className="w-full min-w-[720px] border-collapse text-left text-[10px]">
+          <table className="w-full min-w-[720px] border-collapse text-left">
+            <caption className="sr-only">Stockbee market monitor historical rows by date.</caption>
             <thead>
-              <tr className="border-b border-gray-800 text-[9px] uppercase tracking-wider text-slate-500">
-                <th className="sticky left-0 z-10 bg-[#0a0a0a] py-2 pr-2 font-semibold">Date</th>
-                <th className="px-1 py-2 font-semibold">Up 4%+</th>
-                <th className="px-1 py-2 font-semibold">Dn 4%+</th>
-                <th className="px-1 py-2 font-semibold">5d R</th>
-                <th className="px-1 py-2 font-semibold">10d R</th>
-                <th className="px-1 py-2 font-semibold">Up 25% Q</th>
-                <th className="px-1 py-2 font-semibold">Dn 25% Q</th>
-                <th className="px-1 py-2 font-semibold">Up 25% M</th>
-                <th className="px-1 py-2 font-semibold">Dn 25% M</th>
-                <th className="px-1 py-2 font-semibold">Up 50% M</th>
-                <th className="px-1 py-2 font-semibold">Dn 50% M</th>
-                <th className="px-1 py-2 font-semibold">Up 13% 34d</th>
-                <th className="px-1 py-2 font-semibold">Dn 13% 34d</th>
-                <th className="px-1 py-2 font-semibold">Univ</th>
-                <th className="px-1 py-2 font-semibold">T2108</th>
-                <th className="px-1 py-2 font-semibold">S&amp;P</th>
+              <tr className="border-b border-gray-800">
+                <th scope="col" className="sticky left-0 z-10 bg-terminal-bg py-2 pr-2 t-label">Date</th>
+                <th scope="col" className="px-1 py-2 t-label">Up 4%+</th>
+                <th scope="col" className="px-1 py-2 t-label">Dn 4%+</th>
+                <th scope="col" className="px-1 py-2 t-label">5d R</th>
+                <th scope="col" className="px-1 py-2 t-label">10d R</th>
+                <th scope="col" className="px-1 py-2 t-label">Up 25% Q</th>
+                <th scope="col" className="px-1 py-2 t-label">Dn 25% Q</th>
+                <th scope="col" className="px-1 py-2 t-label">Up 25% M</th>
+                <th scope="col" className="px-1 py-2 t-label">Dn 25% M</th>
+                <th scope="col" className="px-1 py-2 t-label">Up 50% M</th>
+                <th scope="col" className="px-1 py-2 t-label">Dn 50% M</th>
+                <th scope="col" className="px-1 py-2 t-label">Up 13% 34d</th>
+                <th scope="col" className="px-1 py-2 t-label">Dn 13% 34d</th>
+                <th scope="col" className="px-1 py-2 t-label">Univ</th>
+                <th scope="col" className="px-1 py-2 t-label">T2108</th>
+                <th scope="col" className="px-1 py-2 t-label">S&amp;P</th>
               </tr>
             </thead>
             <tbody>
@@ -195,11 +170,11 @@ const MarketBreadthReport = memo(function MarketBreadthReport({ data }: { data: 
                 return (
                   <tr
                     key={r.date}
-                    className={`border-b border-gray-800/80 font-mono tabular-nums ${
+                    className={`border-b border-gray-800/80 t-mono ${
                       bearishRow ? "text-rose-200/70" : "text-slate-300"
                     }`}
                   >
-                    <td className="sticky left-0 z-10 bg-[#0a0a0a] py-1.5 pr-2 text-slate-200">{r.date_display}</td>
+                    <td className="sticky left-0 z-10 bg-terminal-bg py-1.5 pr-2 text-slate-200">{r.date_display}</td>
                     <td
                       className={`px-1 py-1.5 ${
                         up4hi
@@ -227,7 +202,7 @@ const MarketBreadthReport = memo(function MarketBreadthReport({ data }: { data: 
                       }`}
                     >
                       {r.t2108 != null ? r.t2108.toFixed(2) : "—"}
-                      {t2108Low ? <span className="ml-1 text-[8px] text-orange-400">OS</span> : null}
+                      {t2108Low ? <span className="ml-1 text-[10px] text-orange-400">OS</span> : null}
                     </td>
                     <td className="px-1 py-1.5">{r.sp_index != null ? r.sp_index.toLocaleString() : "—"}</td>
                   </tr>
@@ -239,82 +214,82 @@ const MarketBreadthReport = memo(function MarketBreadthReport({ data }: { data: 
 
         {/* RIGHT: brief ~35% */}
         <div className="flex w-full min-w-[260px] flex-[1_1_35%] flex-col gap-3">
-          <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Daily brief</p>
+          <p className="t-label">Daily brief</p>
 
           {analysis ? (
             <>
-              <div className="rounded-lg border border-gray-800 bg-black/40 p-3">
-                <p className="text-[9px] font-semibold uppercase text-slate-500">Short-term momentum</p>
-                <p className="mt-1 text-xs text-slate-300">{analysis.shortTerm.label}</p>
+              <div className="rounded-lg border border-gray-800 bg-terminal-bg/60 p-3">
+                <p className="t-section text-slate-500">Short-term momentum</p>
+                <p className="mt-1 t-data text-slate-300">{analysis.shortTerm.label}</p>
                 <div className="mt-2">
                   <ImpactBadge level={analysis.shortTerm.badge} />
                 </div>
               </div>
-              <div className="rounded-lg border border-gray-800 bg-black/40 p-3">
-                <p className="text-[9px] font-semibold uppercase text-slate-500">Quarterly breadth</p>
-                <p className="mt-1 text-xs text-slate-300">{analysis.quarterly.label}</p>
+              <div className="rounded-lg border border-gray-800 bg-terminal-bg/60 p-3">
+                <p className="t-section text-slate-500">Quarterly breadth</p>
+                <p className="mt-1 t-data text-slate-300">{analysis.quarterly.label}</p>
                 <div className="mt-2">
                   <ImpactBadge level={analysis.quarterly.badge} />
                 </div>
               </div>
-              <div className="rounded-lg border border-gray-800 bg-black/40 p-3">
-                <p className="text-[9px] font-semibold uppercase text-slate-500">Secondary breadth</p>
-                <p className="mt-1 font-mono text-[11px] text-slate-400">
+              <div className="rounded-lg border border-gray-800 bg-terminal-bg/60 p-3">
+                <p className="t-section text-slate-500">Secondary breadth</p>
+                <p className="mt-1 t-mono text-slate-400">
                   25% M: ↑{fmtN(latest?.up_25_m)} ↓{fmtN(latest?.down_25_m)}
                 </p>
-                <p className="mt-1 font-mono text-[11px] text-slate-400">
+                <p className="mt-1 t-mono text-slate-400">
                   50% M: ↑{fmtN(latest?.up_50_m)} ↓{fmtN(latest?.down_50_m)}
                 </p>
-                <p className="mt-1 font-mono text-[11px] text-slate-400">
+                <p className="mt-1 t-mono text-slate-400">
                   13% / 34d: ↑{fmtN(latest?.up_13_34d)} ↓{fmtN(latest?.down_13_34d)}
                 </p>
               </div>
-              <div className="rounded-lg border border-gray-800 bg-black/40 p-3">
-                <p className="text-[9px] font-semibold uppercase text-slate-500">T2108 (external)</p>
+              <div className="rounded-lg border border-gray-800 bg-terminal-bg/60 p-3">
+                <p className="t-section text-slate-500">T2108 (external)</p>
                 <p className="mt-1 text-lg font-mono font-bold text-white">
                   {latest?.t2108 != null ? latest.t2108.toFixed(2) : "—"}
                 </p>
-                <p className="mt-1 text-xs text-slate-400">{analysis.t2108.text}</p>
+                <p className="mt-1 t-data text-slate-400">{analysis.t2108.text}</p>
                 <div className="mt-2">
                   <ImpactBadge level={analysis.t2108.badge} />
                 </div>
               </div>
               {analysis.verdict ? (
                 <div className="rounded-lg border border-emerald-700/40 bg-emerald-950/30 p-3 shadow-[0_0_16px_rgba(16,185,129,0.12)]">
-                  <p className="text-[9px] font-semibold uppercase text-emerald-400">Final verdict</p>
+                  <p className="t-section text-emerald-400">Final verdict</p>
                   <p className="mt-2 text-sm font-semibold leading-snug text-emerald-100">{analysis.verdict}</p>
                 </div>
               ) : (
-                <div className="rounded-lg border border-gray-800 bg-black/30 p-3 text-[11px] text-slate-500">
+                <div className="rounded-lg border border-gray-800 bg-terminal-bg/40 p-3 t-data text-slate-500">
                   No automated verdict (needs T2108 &lt; 25 and Up 4%+ &gt; 500 on latest row).
                 </div>
               )}
             </>
           ) : (
-            <p className="text-xs text-slate-500">No rows to analyze.</p>
+            <p className="t-data text-slate-500">No rows to analyze.</p>
           )}
 
-          <div className="rounded-lg border border-gray-800 bg-black/40 p-3">
-            <p className="text-[9px] font-semibold uppercase text-slate-500">Leading themes (Finviz 1D proxy)</p>
-            <p className="mt-1 text-[10px] leading-relaxed text-slate-600">{data.leading_themes_note}</p>
+          <div className="rounded-lg border border-gray-800 bg-terminal-bg/60 p-3">
+            <p className="t-section text-slate-500">Leading themes (Finviz 1D proxy)</p>
+            <p className="mt-1 t-micro">{data.leading_themes_note}</p>
             <ul className="mt-2 space-y-1.5">
               {(data.leading_themes ?? []).length ? (
                 (data.leading_themes ?? []).map((t, i) => (
-                  <li key={`${t.theme}-${i}`} className="flex items-baseline justify-between gap-2 text-[11px]">
-                    <span className="truncate text-slate-300">{t.theme}</span>
-                    <span className="shrink-0 font-mono font-semibold text-emerald-300">
+                  <li key={`${t.theme}-${i}`} className="flex items-baseline justify-between gap-2">
+                    <span className="truncate t-data text-slate-300">{t.theme}</span>
+                    <span className="t-mono shrink-0 font-semibold text-emerald-300">
                       {t.perf1D >= 0 ? "+" : ""}
                       {t.perf1D.toFixed(2)}%
                     </span>
                   </li>
                 ))
               ) : (
-                <li className="text-[11px] text-slate-600">No cached Finviz theme snapshot yet.</li>
+                <li className="t-data text-slate-600">No cached Finviz theme snapshot yet.</li>
               )}
             </ul>
           </div>
 
-          <p className="text-[9px] leading-relaxed text-slate-600">
+          <p className="t-micro">
             Source: published Google Sheet linked from Stockbee. For research only — verify before trading.
           </p>
         </div>

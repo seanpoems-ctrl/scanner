@@ -12,3 +12,4 @@ apscheduler>=3.10
 pytz
 pandas-market-calendars>=4.3
 google-generativeai
+pytest>=8.0

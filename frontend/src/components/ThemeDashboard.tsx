@@ -1,7 +1,13 @@
 import React, { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type JSX } from "react";
-import { AlertTriangle, BarChart2, Info, LayoutGrid, Moon, Plus, Search, Sunrise } from "lucide-react";
+import { AlertTriangle, BarChart2, BarChart3, Info, LayoutGrid, Moon, Plus, Search, Sunrise } from "lucide-react";
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import MarketBreadth from "./MarketBreadth";
+import { formatMoney, fmtPct, fmtPrice, pctClass } from "../lib/formatters";
+import { ImpactBadge } from "./ui/ImpactBadge";
+import { ErrorBanner } from "./ui/ErrorBanner";
+import { EmptyState } from "./ui/EmptyState";
+import { PanelLoading, SkeletonRows } from "./ui/SkeletonRows";
+import { RefreshRow } from "./ui/RefreshRow";
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim() || "http://127.0.0.1:8000";
 const THEMES_CACHE_KEY = "power-theme:themes-cache:v1";
@@ -253,24 +259,10 @@ type TickerIntel = {
   theme_matches: string[];
 };
 
-function formatMoney(value: number): string {
-  if (!Number.isFinite(value)) return "—";
-  if (value >= 1_000_000_000) return `$${(value / 1_000_000_000).toFixed(2)}B`;
-  if (value >= 1_000_000) return `$${(value / 1_000_000).toFixed(2)}M`;
-  return `$${value.toFixed(2)}`;
-}
-
-function pctClass(value: number): string {
-  if (!Number.isFinite(value)) return "text-slate-500";
-  if (value > 0) return "text-emerald-400";
-  if (value < 0) return "text-rose-400";
-  return "text-slate-400";
-}
-
 /** Banner background for sub-industry spotlight (1D change). */
 function subIndustryBannerShellClass(perf1D: number | null | undefined): string {
   if (perf1D == null || !Number.isFinite(perf1D)) {
-    return "border-b border-slate-700/80 bg-slate-800/90";
+    return "border-b border-terminal-border bg-terminal-elevated/80";
   }
   if (perf1D > 0) {
     return "border-b border-emerald-800/50 bg-emerald-950/90";
@@ -278,7 +270,7 @@ function subIndustryBannerShellClass(perf1D: number | null | undefined): string 
   if (perf1D < 0) {
     return "border-b border-rose-900/50 bg-rose-950/90";
   }
-  return "border-b border-slate-700/80 bg-slate-800/90";
+  return "border-b border-terminal-border bg-terminal-elevated/80";
 }
 
 function industryThemeBadgeCode(theme: string): string {
@@ -299,20 +291,6 @@ function leaderboardSubSpotlightBadge(sp: LeaderboardSubSpotlight): string {
     return compact.slice(0, 4).toUpperCase() || industryThemeBadgeCode(sp.theme);
   }
   return industryThemeBadgeCode(sp.theme);
-}
-
-function fmtPct(v: number | null | undefined, digits = 2): string {
-  if (v == null || !Number.isFinite(v)) return "—";
-  const x = Number(v);
-  return `${x >= 0 ? "+" : ""}${x.toFixed(digits)}%`;
-}
-
-function fmtPrice(v: number | null | undefined): string {
-  if (v == null || !Number.isFinite(v)) return "—";
-  const x = Number(v);
-  if (x >= 1000) return Math.round(x).toLocaleString();
-  if (x >= 100) return x.toFixed(1);
-  return x.toFixed(2);
 }
 
 function gapTvSymbolOnly(full: string | null | undefined): string {
@@ -422,40 +400,40 @@ function VixFearGaugeLite({ close, changePct }: { close: number | null | undefin
   return (
     <div className="rounded-xl border border-terminal-border bg-terminal-card shadow-sm">
       <header className="border-b border-terminal-border px-4 py-3">
-        <h3 className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">VIX Fear Gauge</h3>
+        <h3 className="t-section">VIX Fear Gauge</h3>
       </header>
       <div className="px-4 py-3">
         <div className="flex items-baseline justify-between gap-3">
           <div className="min-w-0">
-            <p className="text-[10px] text-slate-600">CBOE:VIX</p>
+            <p className="t-micro">CBOE:VIX</p>
             <p className="mt-0.5 font-mono text-2xl font-extrabold tabular-nums" style={{ color: mood.color }}>
               {v == null ? "—" : v.toFixed(2)}
             </p>
           </div>
           <div className="text-right">
-            <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Expected move</p>
-            <p className="mt-0.5 font-mono text-sm font-bold tabular-nums text-slate-200">{v == null ? "—" : `±${(v / 16).toFixed(2)}%`}</p>
-            <p className={`mt-1 font-mono text-[11px] tabular-nums ${pctClass(changePct ?? 0)}`}>
+            <p className="t-label">Expected move</p>
+            <p className="mt-0.5 t-mono text-slate-200 text-sm font-bold">{v == null ? "—" : `±${(v / 16).toFixed(2)}%`}</p>
+            <p className={`mt-1 t-mono ${pctClass(changePct ?? 0)}`}>
               {changePct != null && changePct >= 0 ? "+" : ""}
               {changePct == null || !Number.isFinite(changePct) ? "—" : `${changePct.toFixed(2)}%`}
             </p>
           </div>
         </div>
         <div className="mt-3">
-          <div className="mb-2 flex items-center justify-between text-[10px] text-slate-600">
+          <div className="mb-2 flex items-center justify-between t-micro">
             <span>{min}</span>
             <span className="font-semibold" style={{ color: mood.color }}>
               {mood.label}
             </span>
             <span>{max}</span>
           </div>
-          <div className="h-2 w-full overflow-hidden rounded-full bg-slate-800">
+          <div className="h-2 w-full overflow-hidden rounded-full bg-terminal-elevated/40">
             <div
               className="h-full"
               style={{ width: `${pct}%`, background: "linear-gradient(to right, #00e676, #ffee58, #ff9100, #ff1744)" }}
             />
           </div>
-          <p className="mt-2 text-[10px] font-medium" style={{ color: mood.color }}>
+          <p className="mt-2 t-micro font-medium" style={{ color: mood.color }}>
             {mood.reminder}
           </p>
         </div>
@@ -481,12 +459,12 @@ function MarketRegimeCard({
   return (
     <div className="rounded-xl border border-terminal-border bg-terminal-card shadow-sm">
       <header className="border-b border-terminal-border px-4 py-3">
-        <h3 className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Market Regime</h3>
+        <h3 className="t-section">Market Regime</h3>
       </header>
       <div className="px-4 py-3">
         <div className={`rounded-lg border px-3 py-3 ${tone}`}>
-          <p className="text-[10px] font-semibold uppercase tracking-wider opacity-90">{title}</p>
-          <p className="mt-1 text-[12px] font-semibold leading-snug">{message ?? "—"}</p>
+          <p className="t-label opacity-90">{title}</p>
+          <p className="mt-1 t-data text-[12px] font-semibold leading-snug">{message ?? "—"}</p>
         </div>
       </div>
     </div>
@@ -502,21 +480,21 @@ function LiquidityFlowCard({ summary }: { summary: ApiPayload["marketFlowSummary
   return (
     <div className="rounded-xl border border-terminal-border bg-terminal-card shadow-sm">
       <header className="border-b border-terminal-border px-4 py-3">
-        <h3 className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Liquidity &amp; Flow</h3>
+        <h3 className="t-section">Liquidity &amp; Flow</h3>
       </header>
-      <div className="grid grid-cols-2 gap-3 px-4 py-3 text-[11px]">
+      <div className="grid grid-cols-2 gap-3 px-4 py-3 t-data">
         <div className="rounded-lg border border-terminal-border bg-terminal-bg/40 px-3 py-2">
-          <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Aggregate $ Vol</p>
-          <p className="mt-0.5 font-mono text-sm font-bold tabular-nums text-slate-200">{dv == null ? "—" : formatMoney(dv)}</p>
-          <p className="mt-0.5 text-[10px] text-slate-600">
-            Prev: <span className="font-mono text-slate-400">{prev == null ? "—" : formatMoney(prev)}</span>
+          <p className="t-label">Aggregate $ Vol</p>
+          <p className="mt-0.5 t-mono text-slate-200 text-sm font-bold">{dv == null ? "—" : formatMoney(dv)}</p>
+          <p className="mt-0.5 t-micro">
+            Prev: <span className="t-mono text-slate-400">{prev == null ? "—" : formatMoney(prev)}</span>
           </p>
         </div>
         <div className="rounded-lg border border-terminal-border bg-terminal-bg/40 px-3 py-2">
-          <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Trend</p>
+          <p className="t-label">Trend</p>
           <p className={`mt-0.5 text-sm font-bold ${cls}`}>{trend === "up" ? "Flow improving" : trend === "down" ? "Flow fading" : "—"}</p>
-          <p className="mt-0.5 text-[10px] text-slate-600">
-            20D avg: <span className="font-mono text-slate-400">{avg20 == null ? "—" : formatMoney(avg20)}</span>
+          <p className="mt-0.5 t-micro">
+            20D avg: <span className="t-mono text-slate-400">{avg20 == null ? "—" : formatMoney(avg20)}</span>
           </p>
         </div>
       </div>
@@ -528,8 +506,8 @@ const RsSnapshot = memo(function RsSnapshot({ rows }: { rows: { theme: string; r
   return (
     <div className="rounded-xl border border-terminal-border bg-terminal-card shadow-sm">
       <header className="border-b border-terminal-border px-4 py-3">
-        <h3 className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">RS Snapshot</h3>
-        <p className="mt-0.5 text-[10px] text-slate-600">Top themes by 1M RS</p>
+        <h3 className="t-section">RS Snapshot</h3>
+        <p className="mt-0.5 t-micro">Top themes by 1M RS</p>
       </header>
       <div className="h-[240px] w-full px-2 py-2">
         {rows.length ? (
@@ -547,7 +525,11 @@ const RsSnapshot = memo(function RsSnapshot({ rows }: { rows: { theme: string; r
             </BarChart>
           </ResponsiveContainer>
         ) : (
-          <div className="px-3 py-10 text-center text-xs text-slate-500">No RS data yet.</div>
+          <EmptyState
+            icon={BarChart3}
+            title="No RS data yet"
+            subtitle="Data loads with the first scanner payload."
+          />
         )}
       </div>
     </div>
@@ -564,7 +546,7 @@ function SetupBadge({ tag }: { tag: string | null | undefined }) {
         : "border-sky-500/45 bg-sky-500/12 text-sky-300";
   return (
     <span
-      className={`inline-flex items-center rounded-md border px-1.5 py-0.5 font-mono text-[9px] font-bold leading-none ${cls}`}
+      className={`inline-flex items-center rounded-md border px-1.5 py-0.5 t-mono font-bold leading-none ${cls}`}
       title={tag === "EP" ? "Episodic Pivot: gap>5%, volume>3× avg, near 52w high" : tag === "U&R" ? "Undercut & Reclaim: price broke below key EMA and reclaimed above it" : "Pullback Buy: Stage-2 uptrend touching 10EMA or 20EMA on orderly volume"}
     >
       {tag}
@@ -578,10 +560,10 @@ function GapGradeBadge({ grade }: { grade: "A" | "B" | "C" }) {
       ? "border-emerald-500/60 bg-emerald-500/20 text-emerald-300"
       : grade === "B"
         ? "border-sky-500/55 bg-sky-500/15 text-sky-200"
-        : "border-slate-500/60 bg-slate-800/80 text-slate-300";
+        : "border-slate-500/60 bg-terminal-elevated/60 text-slate-300";
   return (
     <span
-      className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border text-[10px] font-bold leading-none ${ring}`}
+      className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border t-micro font-bold leading-none ${ring}`}
       title={grade === "A" ? "Scanner A+" : grade === "B" ? "Scanner A" : "Not in scanner audit / ungraded"}
     >
       {grade}
@@ -605,73 +587,35 @@ function useThemesPayload() {
   const [lastUpdatedAt, setLastUpdatedAt] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadingSince, setLoadingSince] = useState<number | null>(null);
+  const isMountedRef = useRef(true);
+  const fetchGenRef = useRef(0);
 
   useEffect(() => {
-    let active = true;
-    async function load() {
-      try {
-        if (!active) return;
-        setLoading(true);
-        setLoadingSince(Date.now());
-        const res = await fetch(`${API_BASE_URL}/api/themes?view=scanner`);
-        const retryAfterRaw = res.headers.get("Retry-After");
-        if (!res.ok) {
-          if (res.status === 429 && retryAfterRaw) {
-            const ra = Number(retryAfterRaw);
-            if (Number.isFinite(ra) && ra > 0) setPollMs(Math.min(8 * 60_000, Math.max(MIN_AUTO_REFRESH_MS, Math.round(ra * 1000))));
-          }
-          // Don't blank the UI on rate-limit or transient errors.
-          if (res.status === 429) {
-            if (!active) return;
-            setError("themes 429");
-            setPayload((prev) => prev ?? makeFallbackPayload(retryAfterRaw ? Number(retryAfterRaw) || 110 : 110));
-            return;
-          }
-          throw new Error(`themes ${res.status}`);
-        }
-        const data = (await res.json()) as ApiPayload;
-        if (!active) return;
-        setPayload(data);
-        setError(null);
-        setLastUpdatedAt(Date.now());
-        try {
-          window.localStorage.setItem(THEMES_CACHE_KEY, JSON.stringify({ payload: data, savedAt: Date.now() }));
-        } catch {
-          // ignore storage quota/private-mode errors
-        }
-        if (data.polling?.pollSeconds) {
-          const n = Number(data.polling.pollSeconds);
-          if (Number.isFinite(n) && n > 0) setPollMs(Math.min(8 * 60_000, Math.max(MIN_AUTO_REFRESH_MS, Math.round(n * 1000))));
-        }
-      } catch (e) {
-        if (!active) return;
-        setError(e instanceof Error ? e.message : "Failed to load themes");
-      } finally {
-        if (!active) return;
-        setLoading(false);
-        setLoadingSince(null);
-      }
-    }
-    void load();
-    const id = window.setInterval(() => void load(), pollMs);
+    isMountedRef.current = true;
     return () => {
-      active = false;
-      window.clearInterval(id);
+      isMountedRef.current = false;
     };
-  }, [pollMs]);
+  }, []);
 
-  const reload = useCallback(async () => {
+  const fetchThemes = useCallback(async (signal?: AbortSignal) => {
+    const gen = ++fetchGenRef.current;
+    const gate = () => isMountedRef.current && (signal == null || !signal.aborted);
+
     try {
+      if (!gate()) return;
       setLoading(true);
       setLoadingSince(Date.now());
-      const res = await fetch(`${API_BASE_URL}/api/themes?view=scanner`);
+      const res = await fetch(`${API_BASE_URL}/api/themes?view=scanner`, signal ? { signal } : undefined);
       const retryAfterRaw = res.headers.get("Retry-After");
       if (!res.ok) {
         if (res.status === 429 && retryAfterRaw) {
           const ra = Number(retryAfterRaw);
-          if (Number.isFinite(ra) && ra > 0) setPollMs(Math.min(8 * 60_000, Math.max(MIN_AUTO_REFRESH_MS, Math.round(ra * 1000))));
+          if (Number.isFinite(ra) && ra > 0) {
+            setPollMs(Math.min(8 * 60_000, Math.max(MIN_AUTO_REFRESH_MS, Math.round(ra * 1000))));
+          }
         }
         if (res.status === 429) {
+          if (!gate()) return;
           setError("themes 429");
           setPayload((prev) => prev ?? makeFallbackPayload(retryAfterRaw ? Number(retryAfterRaw) || 110 : 110));
           return;
@@ -679,6 +623,7 @@ function useThemesPayload() {
         throw new Error(`themes ${res.status}`);
       }
       const data = (await res.json()) as ApiPayload;
+      if (!gate()) return;
       setPayload(data);
       setError(null);
       setLastUpdatedAt(Date.now());
@@ -687,13 +632,45 @@ function useThemesPayload() {
       } catch {
         // ignore storage quota/private-mode errors
       }
+      if (data.polling?.pollSeconds) {
+        const n = Number(data.polling.pollSeconds);
+        if (Number.isFinite(n) && n > 0) {
+          setPollMs(Math.min(8 * 60_000, Math.max(MIN_AUTO_REFRESH_MS, Math.round(n * 1000))));
+        }
+      }
     } catch (e) {
+      if (e instanceof Error && e.name === "AbortError") return;
+      if (!gate()) return;
       setError(e instanceof Error ? e.message : "Failed to load themes");
     } finally {
-      setLoading(false);
-      setLoadingSince(null);
+      if (gen === fetchGenRef.current) {
+        setLoading(false);
+        setLoadingSince(null);
+      }
     }
   }, []);
+
+  useEffect(() => {
+    const abortRef = { current: null as AbortController | null };
+
+    const run = async () => {
+      abortRef.current?.abort();
+      const ac = new AbortController();
+      abortRef.current = ac;
+      await fetchThemes(ac.signal);
+    };
+
+    void run();
+    const id = window.setInterval(() => void run(), pollMs);
+    return () => {
+      abortRef.current?.abort();
+      window.clearInterval(id);
+    };
+  }, [pollMs, fetchThemes]);
+
+  const reload = useCallback(async () => {
+    await fetchThemes();
+  }, [fetchThemes]);
 
   return { payload, error, reload, lastUpdatedAt, loading, loadingSince, pollMs };
 }
@@ -791,15 +768,15 @@ function useFdvLeaderboard(view: "themes" | "industry") {
 function TapeInline({ tape }: { tape: { label: string; symbol: string; close: number | null; change_pct: number | null }[] | undefined }) {
   if (!tape?.length) return null;
   return (
-    <div className="flex flex-wrap items-center gap-y-2 text-[11px]">
+    <div className="flex flex-wrap items-center gap-y-2 t-data">
       {tape.slice(0, 8).map((t, idx) => (
         <Fragment key={`${t.symbol}-${t.label}`}>
-          {idx > 0 ? <span className="mx-4 h-8 w-px shrink-0 bg-slate-800/80" aria-hidden /> : null}
+          {idx > 0 ? <span className="mx-4 h-8 w-px shrink-0 bg-terminal-elevated/60" aria-hidden /> : null}
           <div className="flex min-w-[72px] flex-col items-center justify-center px-1 leading-tight">
-            <span className="font-mono text-[10px] font-semibold text-slate-400">{t.label}</span>
+            <span className="t-label font-mono">{t.label}</span>
             <div className="mt-0.5 flex items-baseline gap-2">
-              <span className="font-mono text-[12px] font-semibold text-slate-200 tabular-nums">{t.close == null ? "—" : fmtPrice(t.close)}</span>
-              <span className={`font-mono text-[11px] tabular-nums ${pctClass(t.change_pct ?? 0)}`}>{fmtPct(t.change_pct, 2)}</span>
+              <span className="t-mono text-slate-200 text-xs font-semibold">{t.close == null ? "—" : fmtPrice(t.close)}</span>
+              <span className={`t-mono ${pctClass(t.change_pct ?? 0)}`}>{fmtPct(t.change_pct, 2)}</span>
             </div>
           </div>
         </Fragment>
@@ -1022,23 +999,28 @@ function TickerDrawer({
   }, [earnings]);
 
   return (
-    <aside className="h-full w-[420px] min-w-[420px] shrink-0 border-l border-terminal-border bg-terminal-elevated">
+    <aside
+      className="h-full w-[420px] min-w-[420px] shrink-0 border-l border-terminal-border bg-terminal-elevated"
+      role="complementary"
+      aria-label={`Ticker details for ${ticker}`}
+    >
       <div className="flex h-full min-h-0 flex-col">
         <header className="shrink-0 border-b border-terminal-border px-4 py-3">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
-              <p className="font-mono text-sm font-semibold text-white">{ticker}</p>
-              <p className="mt-0.5 truncate text-[11px] text-slate-400">{intel?.name ?? (intelLoading ? "Loading…" : "—")}</p>
+              <p className="t-page font-mono">{ticker}</p>
+              <p className="mt-0.5 truncate t-data text-slate-400">{intel?.name ?? (intelLoading ? "Loading…" : "—")}</p>
             </div>
             <button
               type="button"
               onClick={onClose}
               className="rounded-md border border-terminal-border bg-terminal-bg px-2 py-1 text-xs font-semibold text-slate-300 hover:border-slate-500 hover:text-white"
+              aria-label="Close ticker drawer"
             >
               Close
             </button>
           </div>
-          <div className="mt-2 flex flex-wrap items-baseline gap-x-3 gap-y-1 text-[11px]">
+          <div className="mt-2 flex flex-wrap items-baseline gap-x-3 gap-y-1 t-data">
             <span className="font-mono text-slate-200 tabular-nums">{intel?.close == null ? "—" : fmtPrice(intel.close)}</span>
             <span className={`font-mono tabular-nums ${pctClass(intel?.today_return_pct ?? 0)}`}>{changeText}</span>
             <span className="text-slate-600">·</span>
@@ -1050,31 +1032,31 @@ function TickerDrawer({
         <div className="fintech-scroll min-h-0 flex-1 overflow-auto p-4">
           {meta?.reasoning ? (
             <section className="rounded-xl border border-terminal-border bg-terminal-card px-4 py-3 shadow-sm">
-              <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Reasoning</p>
-              <p className="mt-2 text-[11px] leading-relaxed text-slate-200">{meta.reasoning}</p>
+              <p className="t-section">Reasoning</p>
+              <p className="mt-2 t-data">{meta.reasoning}</p>
             </section>
           ) : null}
 
           <section className="rounded-xl border border-terminal-border bg-terminal-card px-4 py-3 shadow-sm">
-            <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Classification</p>
-            <div className="mt-2 grid grid-cols-[84px_1fr] gap-x-3 gap-y-1 text-[11px]">
-              <p className="text-slate-500">Sector</p>
-              <p className="truncate font-semibold text-slate-200">{intel?.sector ?? meta?.sector ?? "—"}</p>
-              <p className="text-slate-500">Industry</p>
-              <p className="truncate font-semibold text-slate-200">{intel?.industry ?? meta?.industry ?? "—"}</p>
-              <p className="text-slate-500">Theme</p>
-              <p className="truncate font-semibold text-sky-200">{intel?.theme ?? meta?.theme ?? "—"}</p>
-              <p className="text-slate-500">Sub‑Theme</p>
-              <p className="truncate font-semibold text-violet-200">{intel?.subtheme ?? meta?.category ?? "—"}</p>
-              <p className="text-slate-500">Grade</p>
-              <p className="truncate font-semibold text-amber-200">{meta?.grade ?? "—"}</p>
+            <p className="t-section">Classification</p>
+            <div className="mt-2 grid grid-cols-[84px_1fr] gap-x-3 gap-y-1">
+              <p className="t-label">Sector</p>
+              <p className="truncate t-data font-semibold">{intel?.sector ?? meta?.sector ?? "—"}</p>
+              <p className="t-label">Industry</p>
+              <p className="truncate t-data font-semibold">{intel?.industry ?? meta?.industry ?? "—"}</p>
+              <p className="t-label">Theme</p>
+              <p className="truncate t-data font-semibold text-sky-200">{intel?.theme ?? meta?.theme ?? "—"}</p>
+              <p className="t-label">Sub‑Theme</p>
+              <p className="truncate t-data font-semibold text-violet-200">{intel?.subtheme ?? meta?.category ?? "—"}</p>
+              <p className="t-label">Grade</p>
+              <p className="truncate t-data font-semibold text-amber-200">{meta?.grade ?? "—"}</p>
             </div>
           </section>
 
           <section className="mt-3 rounded-xl border border-terminal-border bg-terminal-card shadow-sm">
             <header className="flex items-center justify-between gap-2 border-b border-terminal-border px-4 py-3">
-              <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">News / events (90D)</p>
-              <span className="text-[10px] text-slate-600">{newsLoading ? "Loading…" : `${news.length}`}</span>
+              <p className="t-section">News / events (90D)</p>
+              <span className="t-micro">{newsLoading ? "Loading…" : `${news.length}`}</span>
             </header>
             <div className="p-2">
               {!newsLoading && !news.length ? (
@@ -1084,17 +1066,17 @@ function TickerDrawer({
                   {news.slice(0, 30).map((n, i) => (
                     <li key={`${n.published_at_utc ?? n.date_utc ?? "x"}-${i}`} className="rounded-lg border border-terminal-border/60 bg-terminal-bg/30 px-2.5 py-2">
                       <div className="flex items-baseline justify-between gap-3">
-                        <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">{n.event_type || "News"}</span>
-                        <span className="font-mono text-[10px] text-slate-600 tabular-nums">{n.date_utc ?? "—"}</span>
+                        <span className="t-label">{n.event_type || "News"}</span>
+                        <span className="t-mono text-slate-600">{n.date_utc ?? "—"}</span>
                       </div>
                       {n.link ? (
-                        <a href={n.link} target="_blank" rel="noopener noreferrer" className="mt-1 block text-[11px] text-slate-200 hover:underline">
+                        <a href={n.link} target="_blank" rel="noopener noreferrer" className="mt-1 block t-data hover:underline">
                           {n.title}
                         </a>
                       ) : (
-                        <p className="mt-1 text-[11px] text-slate-200">{n.title}</p>
+                        <p className="mt-1 t-data">{n.title}</p>
                       )}
-                      <p className="mt-1 text-[10px] text-slate-600">{n.source}</p>
+                      <p className="mt-1 t-micro">{n.source}</p>
                     </li>
                   ))}
                 </ul>
@@ -1102,9 +1084,10 @@ function TickerDrawer({
             </div>
           </section>
 
-          <p className="mt-3 text-[10px] leading-relaxed text-slate-600">
+          <p className="mt-3 t-micro">
             Note: This drawer currently uses best‑effort Yahoo Finance data (intel/news/earnings). Insider/institution/analyst target changes can be added next.
           </p>
+          <p className="mt-2 t-micro text-slate-600">Press Esc to close this drawer.</p>
         </div>
       </div>
     </aside>
@@ -1126,7 +1109,7 @@ function BreakingRiskBanner({
         ? "border-amber-500/25 bg-amber-500/10 text-amber-100"
         : "border-emerald-500/25 bg-emerald-500/10 text-emerald-100";
   return (
-    <div className={`shrink-0 rounded-xl border px-4 py-2 text-[11px] shadow-sm ${ring}`}>
+    <div className={`shrink-0 rounded-xl border px-4 py-2 t-data shadow-sm ${ring}`}>
       <div className="flex items-center gap-2">
         <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden />
         <p className="truncate">
@@ -1210,27 +1193,6 @@ function useIntelBrief() {
 
 // ── Intelligence Brief panel (auto-displaying, no Generate button) ─────────────
 
-// ── Catalyst impact badge ──────────────────────────────────────────────────
-function ImpactBadge({ level }: { level: string }) {
-  const lv = (level || "").toLowerCase();
-  // 4-tier: Extreme High | High | Medium | Low
-  const styles =
-    lv.includes("extreme")
-      ? "text-rose-500 font-black border-rose-500/50 bg-rose-500/10"
-      : lv === "high"
-      ? "text-orange-400 font-bold border-orange-400/50 bg-orange-400/10"
-      : lv === "low"
-      ? "text-emerald-400 font-semibold border-emerald-400/50 bg-emerald-400/10"
-      : "text-amber-200 font-semibold border-amber-200/50 bg-amber-200/10"; // Medium
-  return (
-    <span
-      className={`inline-block min-w-[80px] rounded border px-1.5 py-0.5 text-center text-[9px] uppercase tracking-widest ${styles}`}
-    >
-      {level || "Medium"}
-    </span>
-  );
-}
-
 // ── Catalyst structured table ──────────────────────────────────────────────
 // Splits "Bullish. Rest of sentence" → colored first word + dimmer rest
 function ImpactText({ text, size }: { text: string; size: string }) {
@@ -1256,15 +1218,16 @@ function ImpactText({ text, size }: { text: string; size: string }) {
 
 function CatalystTable({ rows, isModal = false }: { rows: CatalystRow[]; isModal?: boolean }) {
   if (!rows || rows.length === 0) return null;
-  const th = isModal ? "text-[11px]" : "text-[10px]";
-  const td = isModal ? "text-[13px]" : "text-[11px]";
+  const th = isModal ? "t-label tracking-widest" : "t-micro font-semibold uppercase tracking-widest text-slate-500";
+  const td = isModal ? "text-[13px] leading-relaxed text-slate-200" : "t-data";
   return (
     <div className="my-2 overflow-x-auto rounded-lg border border-slate-800/80">
       <table className="w-full">
+        <caption className="sr-only">Catalyst events referenced in the intelligence brief.</caption>
         <thead>
-          <tr className="border-b border-slate-800/60 bg-slate-900/40">
+          <tr className="border-b border-slate-800/60 bg-terminal-bg/50">
             {["Catalyst", "Data / Event", "Market Impact", "Level"].map((h) => (
-              <th key={h} className={`px-4 py-2 text-left font-semibold uppercase tracking-widest text-slate-500 ${th}`}>
+              <th key={h} scope="col" className={`px-4 py-2 text-left ${th}`}>
                 {h}
               </th>
             ))}
@@ -1272,7 +1235,7 @@ function CatalystTable({ rows, isModal = false }: { rows: CatalystRow[]; isModal
         </thead>
         <tbody>
           {rows.map((row, ri) => (
-            <tr key={ri} className="border-b border-slate-800/60 transition-colors hover:bg-slate-800/10">
+            <tr key={ri} className="border-b border-slate-800/60 transition-colors hover:bg-terminal-bg/30">
               {/* Catalyst — bold white */}
               <td className={`px-4 py-3 font-semibold text-slate-100 ${td}`}>{row.catalyst}</td>
               {/* Event — bold, slightly brighter */}
@@ -1311,13 +1274,13 @@ function renderBriefMarkdown(brief: IntelBrief, isModal: boolean = false): JSX.E
   // array with a sentinel so CatalystTable can be injected at that position.
   // Scale classes: panel uses compact sizes; modal bumps everything ~20%
   const sz = {
-    genHeader:   isModal ? "text-[13.2px]" : "text-[11px]",
-    section:     isModal ? "text-[11px]"   : "text-[10px]",
-    body:        isModal ? "text-[13.2px]" : "text-[11px]",
-    bullet:      isModal ? "text-[13.2px]" : "text-[11px]",
-    blockquote:  isModal ? "text-[13.2px]" : "text-[11px]",
-    thCell:      isModal ? "text-[10px]"   : "text-[9px]",
-    tdCell:      isModal ? "text-[12px]"   : "text-[10px]",
+    genHeader:   isModal ? "text-sm font-mono" : "t-mono",
+    section:     isModal ? "t-label tracking-widest text-slate-400" : "t-micro font-semibold uppercase tracking-widest text-slate-400",
+    body:        isModal ? "text-sm" : "t-data",
+    bullet:      isModal ? "text-sm" : "t-data",
+    blockquote:  isModal ? "text-sm" : "t-data",
+    thCell:      "t-micro font-semibold uppercase tracking-widest text-slate-500",
+    tdCell:      isModal ? "text-[12px]" : "t-data",
     leading:     isModal ? "leading-snug"  : "leading-relaxed",
   };
 
@@ -1339,10 +1302,11 @@ function renderBriefMarkdown(brief: IntelBrief, isModal: boolean = false): JSX.E
       rendered.push(
         <div key={`tbl-${rendered.length}`} className="my-2 overflow-x-auto rounded-lg border border-slate-800/60">
           <table className="w-full">
+            <caption className="sr-only">Data table from intelligence brief.</caption>
             <thead>
-              <tr className="border-b border-slate-800/60 bg-slate-900/40">
+              <tr className="border-b border-slate-800/60 bg-terminal-bg/50">
                 {headers.map((h) => (
-                  <th key={h} className={`px-4 py-2 text-left font-semibold uppercase tracking-widest text-slate-500 ${sz.thCell}`}>{h}</th>
+                  <th key={h} scope="col" className={`px-4 py-2 text-left font-semibold uppercase tracking-widest text-slate-500 ${sz.thCell}`}>{h}</th>
                 ))}
               </tr>
             </thead>
@@ -1350,7 +1314,7 @@ function renderBriefMarkdown(brief: IntelBrief, isModal: boolean = false): JSX.E
               {bodyRows.map((row, ri) => {
                 const cells = row.split("|").filter(Boolean).map((c) => c.trim());
                 return (
-                  <tr key={ri} className="border-b border-slate-800/50 hover:bg-slate-800/10">
+                  <tr key={ri} className="border-b border-slate-800/50 hover:bg-terminal-bg/30">
                     {cells.map((c, ci) => (
                       <td key={ci} className={`px-4 py-2.5 text-slate-300 ${sz.tdCell}`}><InlineBold text={c} /></td>
                     ))}
@@ -1388,14 +1352,14 @@ function renderBriefMarkdown(brief: IntelBrief, isModal: boolean = false): JSX.E
       if (isModal) {
         rendered.push(
           <div key={i} className="mt-4 flex items-center gap-2 rounded-lg border border-accent/30 bg-terminal-elevated px-3 py-2">
-            <p className={`font-mono font-bold text-accent ${sz.genHeader}`}>{trimmed.slice(3)}</p>
+            <p className={`font-bold text-accent ${sz.genHeader}`}>{trimmed.slice(3)}</p>
           </div>
         );
       }
       // side panel: skip entirely — timestamp lives in the header row
     } else if (trimmed.startsWith("### ")) {
       rendered.push(
-        <h3 key={i} className={`mt-4 border-b border-terminal-border/40 pb-1 font-semibold uppercase tracking-widest text-slate-400 ${sz.section}`}>
+        <h3 key={i} className={`mt-4 border-b border-terminal-border/40 pb-1 ${sz.section}`}>
           {trimmed.slice(4)}
         </h3>
       );
@@ -1447,13 +1411,13 @@ function IntelBriefPanel({
         <div className="h-3 w-3/4 animate-pulse rounded bg-terminal-border" />
         <div className="h-3 w-full animate-pulse rounded bg-terminal-border" />
         <div className="h-3 w-5/6 animate-pulse rounded bg-terminal-border" />
-        <p className="mt-2 text-[10px] text-slate-600">Generating intelligence brief…</p>
+        <p className="mt-2 t-micro">Generating intelligence brief…</p>
       </div>
     );
   }
   if (!brief?.markdown) {
     return (
-      <p className="p-3 text-[11px] text-slate-600">
+      <p className="p-3 t-data text-slate-600">
         Brief scheduled for next market session. Will appear automatically at 8:03 AM ET (pre) or 4:55 PM ET (post).
       </p>
     );
@@ -1490,6 +1454,15 @@ function IntelBriefCard({
   const now_et_h = new Date().toLocaleString("en-US", { timeZone: "America/New_York", hour: "numeric", hour12: false });
   const autoMode: "pre" | "post" = Number(now_et_h) < 17 ? "pre" : "post";
 
+  useEffect(() => {
+    if (!isExpanded) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setIsExpanded(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [isExpanded]);
+
   return (
     <>
       <section className="flex min-h-0 flex-col rounded-xl border border-terminal-border bg-terminal-card shadow-sm">
@@ -1501,15 +1474,15 @@ function IntelBriefCard({
               {mode === "pre"
                 ? <Sunrise className="h-3.5 w-3.5 shrink-0 text-amber-300" aria-hidden />
                 : <Moon className="h-3.5 w-3.5 shrink-0 text-sky-300" aria-hidden />}
-              <span className="shrink-0 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+              <span className="shrink-0 t-section">
                 Market Intelligence
               </span>
-              <span className="shrink-0 text-[10px] text-slate-600">—</span>
-              <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+              <span className="shrink-0 t-micro">—</span>
+              <span className="shrink-0 t-label">
                 {mode === "pre" ? "Pre-Market" : "Post-Market"}
               </span>
               {brief?.gen_time_et && (
-                <span className="ml-2 shrink-0 font-mono text-[9px] text-slate-600">
+                <span className="ml-2 shrink-0 t-mono text-slate-600">
                   Gen {brief.gen_time_et}
                 </span>
               )}
@@ -1519,11 +1492,11 @@ function IntelBriefCard({
             <div className="flex shrink-0 items-center gap-x-1.5">
               <div className="flex items-center gap-1 rounded-full border border-terminal-border bg-terminal-bg p-0.5">
                 <button type="button" onClick={() => onModeChange("pre")}
-                  className={`rounded-full px-2 py-0.5 text-[10px] font-semibold transition-colors ${mode === "pre" ? "bg-accent/20 text-white" : "text-slate-500 hover:text-white"}`}>
+                  className={`rounded-full px-2 py-0.5 t-micro font-semibold transition-colors ${mode === "pre" ? "bg-accent/20 text-white" : "text-slate-500 hover:text-white"}`}>
                   PRE
                 </button>
                 <button type="button" onClick={() => onModeChange("post")}
-                  className={`rounded-full px-2 py-0.5 text-[10px] font-semibold transition-colors ${mode === "post" ? "bg-accent/20 text-white" : "text-slate-500 hover:text-white"}`}>
+                  className={`rounded-full px-2 py-0.5 t-micro font-semibold transition-colors ${mode === "post" ? "bg-accent/20 text-white" : "text-slate-500 hover:text-white"}`}>
                   POST
                 </button>
               </div>
@@ -1532,19 +1505,21 @@ function IntelBriefCard({
                 type="button"
                 disabled={!brief?.markdown}
                 onClick={() => setIsExpanded(true)}
-                className="rounded border border-slate-500/60 bg-transparent px-2 py-0.5 font-mono text-[9px] font-semibold text-slate-400 transition-colors hover:border-slate-400 hover:bg-slate-800/50 hover:text-white disabled:cursor-not-allowed disabled:opacity-30"
+                aria-haspopup="dialog"
+                aria-expanded={isExpanded}
+                className="rounded border border-slate-500/60 bg-transparent px-2 py-0.5 t-mono font-semibold text-slate-400 transition-colors hover:border-slate-400 hover:bg-terminal-elevated/40 hover:text-white disabled:cursor-not-allowed disabled:opacity-30"
               >
                 OPEN
               </button>
               <button type="button" disabled={loading} title="Regenerate brief"
                 onClick={() => onRefresh(mode)}
-                className="rounded-md border border-terminal-border bg-terminal-bg px-2 py-0.5 text-[9px] font-semibold text-slate-500 hover:border-accent/30 hover:text-white disabled:opacity-40">
+                className="rounded-md border border-terminal-border bg-terminal-bg px-2 py-0.5 t-micro font-semibold text-slate-500 hover:border-accent/30 hover:text-white disabled:opacity-40">
                 {loading ? "…" : "↺"}
               </button>
             </div>
           </div>
           {autoMode !== mode && (
-            <p className="mt-0.5 text-[9px] text-slate-600">
+            <p className="mt-0.5 t-micro">
               Auto-display: {autoMode === "pre" ? "Pre-Market" : "Post-Market"} · switch above to compare
             </p>
           )}
@@ -1557,7 +1532,10 @@ function IntelBriefCard({
       {/* ── Focus Modal ── */}
       {isExpanded && brief?.markdown && (
         <div
-          className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/80 backdrop-blur-xl"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="intel-brief-modal-title"
+          className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-terminal-bg/90 backdrop-blur-xl"
           onClick={(e) => { if (e.target === e.currentTarget) setIsExpanded(false); }}
         >
           <div className="relative mx-auto my-8 w-full max-w-3xl rounded-2xl border border-terminal-border bg-terminal-card shadow-2xl">
@@ -1567,11 +1545,11 @@ function IntelBriefCard({
                 {brief.brief_type === "pre"
                   ? <Sunrise className="h-4 w-4 text-amber-300" aria-hidden />
                   : <Moon className="h-4 w-4 text-sky-300" aria-hidden />}
-                <span className="text-[12px] font-bold uppercase tracking-widest text-white">
+                <span id="intel-brief-modal-title" className="text-[12px] font-bold uppercase tracking-widest text-white">
                   Market Intelligence — {brief.brief_type === "pre" ? "Pre-Market" : "Post-Market"}
                 </span>
                 {brief.gen_time_et && (
-                  <span className="ml-2 font-mono text-[10px] text-accent">
+                  <span className="ml-2 t-mono text-accent">
                     Gen {brief.gen_time_et}
                   </span>
                 )}
@@ -1580,15 +1558,16 @@ function IntelBriefCard({
                 type="button"
                 onClick={() => setIsExpanded(false)}
                 className="rounded-full p-1 text-slate-500 transition-colors hover:bg-terminal-elevated hover:text-white"
-                aria-label="Close"
+                aria-label="Close intelligence brief"
               >
                 ✕
               </button>
             </div>
             {/* Modal body — 20% larger base text, tighter leading */}
-            <article className="space-y-2 px-6 py-5 text-[13.2px] leading-snug">
+            <article className="space-y-2 px-6 py-5 text-sm leading-snug">
               {renderBriefMarkdown(brief, true)}
             </article>
+            <p className="px-6 pb-5 t-micro text-slate-600">Press Esc to close.</p>
           </div>
         </div>
       )}
@@ -2118,7 +2097,7 @@ const ScannerView = memo(function ScannerView({
           {leaderboardSubSpotlight ? (
             <>
               <div className={`px-4 pb-3.5 pt-3 ${subIndustryBannerShellClass(leaderboardSubSpotlight.perf1D)}`}>
-                <p className="text-[9px] font-semibold uppercase tracking-widest text-white/55">Thematic spotlight</p>
+                <p className="t-micro font-semibold uppercase tracking-widest text-white/55">Thematic spotlight</p>
                 <div className="mt-2 flex items-start justify-between gap-2">
                   <div className="flex min-w-0 flex-1 items-start gap-2.5">
                     <LayoutGrid className="mt-0.5 h-4 w-4 shrink-0 text-white/85" aria-hidden />
@@ -2137,11 +2116,11 @@ const ScannerView = memo(function ScannerView({
                             ? fmtPct(leaderboardSubSpotlight.perf1D, 2)
                             : "—"}
                         </span>
-                        <span className="text-[10px] font-normal text-white/70">1D</span>
+                        <span className="t-micro font-normal text-white/70">1D</span>
                       </p>
                     </div>
                   </div>
-                  <span className="shrink-0 rounded-full border border-white/20 bg-black/20 px-2.5 py-1 text-center text-[10px] font-semibold leading-tight text-white/90 backdrop-blur-sm">
+                  <span className="shrink-0 rounded-full border border-white/20 bg-terminal-bg/30 px-2.5 py-1 text-center t-micro font-semibold leading-tight text-white/90 backdrop-blur-sm">
                     <span className="font-mono">{leaderboardSubSpotlightBadge(leaderboardSubSpotlight)}</span>
                     <span className="mx-1 text-white/40">·</span>
                     <span>{industrySpotlightMoverStats?.n ?? leaderboardSubSpotlight.totalCount}</span>
@@ -2190,12 +2169,12 @@ const ScannerView = memo(function ScannerView({
                       key={cell.label}
                       className="rounded-lg border border-terminal-border/70 bg-terminal-bg/50 px-2 py-2 text-center"
                     >
-                      <p className="text-[8px] font-semibold uppercase tracking-wider text-slate-500">{cell.label}</p>
+                      <p className="t-label">{cell.label}</p>
                       <p className={`mt-1 text-sm font-semibold tabular-nums ${cell.valueClass}`}>{cell.value}</p>
                     </div>
                   ))}
                 </div>
-                <p className="text-[10px] text-slate-500">
+                <p className="t-micro text-slate-500">
                   RS{" "}
                   <span className="font-mono text-slate-400">
                     {leaderboardSubSpotlight.relativeStrength1M == null ||
@@ -2218,17 +2197,17 @@ const ScannerView = memo(function ScannerView({
                 ) : (
                   <>
                     <div>
-                      <p className="mb-2 text-[9px] font-semibold uppercase tracking-wider text-slate-500">
+                      <p className="mb-2 t-label">
                         Today&apos;s movers
                       </p>
                       <div className="space-y-2.5">
                         <div className="flex flex-wrap items-center gap-2">
-                          <span className="w-14 shrink-0 text-[10px] font-bold text-emerald-400">▲ Best</span>
+                          <span className="w-14 shrink-0 t-micro font-bold text-emerald-400">▲ Best</span>
                           <div className="flex min-w-0 flex-1 flex-wrap gap-1.5">
                             {(industryMovers?.top_gainers ?? []).map((r) => (
                               <span
                                 key={`g-${r.ticker}`}
-                                className="inline-flex items-center gap-1 rounded-full border border-emerald-800/50 bg-emerald-950/35 px-2 py-0.5 font-mono text-[10px] font-semibold text-emerald-300"
+                                className="inline-flex items-center gap-1 rounded-full border border-emerald-800/50 bg-emerald-950/35 px-2 py-0.5 t-mono font-semibold text-emerald-300"
                               >
                                 {r.ticker}
                                 <span className={pctClass(r.change_pct)}>
@@ -2238,17 +2217,17 @@ const ScannerView = memo(function ScannerView({
                               </span>
                             ))}
                             {!(industryMovers?.top_gainers?.length) ? (
-                              <span className="text-[10px] text-slate-600">—</span>
+                              <span className="t-micro">—</span>
                             ) : null}
                           </div>
                         </div>
                         <div className="flex flex-wrap items-center gap-2">
-                          <span className="w-14 shrink-0 text-[10px] font-bold text-rose-400">▼ Worst</span>
+                          <span className="w-14 shrink-0 t-micro font-bold text-rose-400">▼ Worst</span>
                           <div className="flex min-w-0 flex-1 flex-wrap gap-1.5">
                             {(industryMovers?.top_losers ?? []).map((r) => (
                               <span
                                 key={`l-${r.ticker}`}
-                                className="inline-flex items-center gap-1 rounded-full border border-rose-900/50 bg-rose-950/35 px-2 py-0.5 font-mono text-[10px] font-semibold text-rose-300"
+                                className="inline-flex items-center gap-1 rounded-full border border-rose-900/50 bg-rose-950/35 px-2 py-0.5 t-mono font-semibold text-rose-300"
                               >
                                 {r.ticker}
                                 <span className={pctClass(r.change_pct)}>
@@ -2258,14 +2237,14 @@ const ScannerView = memo(function ScannerView({
                               </span>
                             ))}
                             {!(industryMovers?.top_losers?.length) ? (
-                              <span className="text-[10px] text-slate-600">—</span>
+                              <span className="t-micro">—</span>
                             ) : null}
                           </div>
                         </div>
                       </div>
                     </div>
                     <div>
-                      <p className="mb-2 text-[9px] font-semibold uppercase tracking-wider text-slate-500">All stocks</p>
+                      <p className="mb-2 t-label">All stocks</p>
                       <div className="max-h-36 overflow-y-auto rounded-lg border border-terminal-border/60 bg-terminal-bg/40 p-2">
                         {industrySpotlightMoverStats?.rows?.length ? (
                           <div className="flex flex-wrap gap-1.5">
@@ -2274,14 +2253,14 @@ const ScannerView = memo(function ScannerView({
                               .map((r) => (
                                 <span
                                   key={`cloud-${r.ticker}`}
-                                  className="rounded-md border border-slate-700/90 bg-slate-800/90 px-2 py-1 font-mono text-[10px] font-medium text-slate-200"
+                                  className="rounded-md border border-slate-700/90 bg-terminal-elevated/80 px-2 py-1 t-mono font-medium text-slate-200"
                                 >
                                   {r.ticker}
                                 </span>
                               ))}
                           </div>
                         ) : (
-                          <p className="text-[10px] text-slate-600">No ticker universe yet.</p>
+                          <p className="t-micro">No ticker universe yet.</p>
                         )}
                       </div>
                     </div>
@@ -2292,8 +2271,8 @@ const ScannerView = memo(function ScannerView({
           ) : (
             <>
               <header className="border-b border-terminal-border px-4 py-3">
-                <h3 className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Thematic Spotlight</h3>
-                <p className="mt-0.5 truncate text-[10px] text-slate-600">{spotlightTheme?.theme ?? "—"}</p>
+                <h3 className="t-section">Thematic Spotlight</h3>
+                <p className="mt-0.5 truncate t-micro">{spotlightTheme?.theme ?? "—"}</p>
               </header>
               <div className="px-4 py-3">
             {!spotlightTheme && !leaderboardSubSpotlight ? (
@@ -2302,14 +2281,14 @@ const ScannerView = memo(function ScannerView({
               <>
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <p className="text-[12px] font-semibold text-white">{spotlightTheme.theme}</p>
-                  <p className="font-mono text-[11px] text-slate-400 tabular-nums">
+                  <p className="t-mono text-slate-400">
                     RS{" "}
                     {spotlightTheme.relativeStrength1M == null || !Number.isFinite(spotlightTheme.relativeStrength1M)
                       ? "—"
                       : spotlightTheme.relativeStrength1M.toFixed(1)}
                   </p>
                 </div>
-                <p className="mt-1 text-[10px] text-slate-600">
+                <p className="mt-1 t-micro">
                   Leaders: <span className="font-mono text-slate-300">{(spotlightTheme.leaders ?? []).slice(0, 6).join(", ") || "—"}</span>
                 </p>
                 <div className="mt-3 grid grid-cols-2 gap-2">
@@ -2317,7 +2296,7 @@ const ScannerView = memo(function ScannerView({
                     <div key={`b-${x.ticker}`} className="rounded-lg border border-terminal-border bg-terminal-bg/40 px-2.5 py-2">
                       <div className="flex items-baseline justify-between gap-2">
                         <span className="font-mono text-[12px] font-semibold text-accent">{x.ticker}</span>
-                        <span className={`font-mono text-[11px] tabular-nums ${pctClass(x.today_return_pct)}`}>
+                        <span className={`t-mono ${pctClass(x.today_return_pct)}`}>
                           {x.today_return_pct >= 0 ? "+" : ""}
                           {x.today_return_pct.toFixed(2)}%
                         </span>
@@ -2339,8 +2318,8 @@ const ScannerView = memo(function ScannerView({
 
         <div className="rounded-xl border border-terminal-border bg-terminal-card shadow-sm">
           <header className="border-b border-terminal-border px-4 py-3">
-            <h3 className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Leader Constituents</h3>
-            <p className="mt-0.5 text-[10px] text-slate-600">Top names (grade + liquidity)</p>
+            <h3 className="t-section">Leader Constituents</h3>
+            <p className="mt-0.5 t-micro">Top names (grade + liquidity)</p>
           </header>
           <div className="px-4 py-3">
             {constituents.length ? (
@@ -2357,13 +2336,13 @@ const ScannerView = memo(function ScannerView({
                     >
                       <div className="flex items-baseline justify-between gap-2">
                         <span className="font-mono text-[12px] font-semibold text-accent">{c.ticker}</span>
-                        <span className="text-[10px] font-semibold text-slate-500">{c.grade}</span>
+                        <span className="t-label">{c.grade}</span>
                       </div>
                       <div className="mt-1 flex items-baseline justify-between gap-2">
-                        <span className="font-mono text-[11px] text-slate-300">{fmtPrice(c.close)}</span>
-                        <span className={`font-mono text-[11px] tabular-nums ${pctClass(c.today ?? 0)}`}>{fmtPct(c.today, 2)}</span>
+                        <span className="t-mono text-slate-300">{fmtPrice(c.close)}</span>
+                        <span className={`t-mono ${pctClass(c.today ?? 0)}`}>{fmtPct(c.today, 2)}</span>
                       </div>
-                      <p className="mt-1 text-[9px] text-slate-600">ADDV {formatMoney(c.addv)}</p>
+                      <p className="mt-1 t-micro">ADDV {formatMoney(c.addv)}</p>
                     </a>
                   );
                 })}
@@ -2383,7 +2362,7 @@ const ScannerView = memo(function ScannerView({
               <h2 className="truncate text-sm font-semibold text-white">Leaderboard</h2>
               {/* Breadcrumb: show when drilled into a thematic bucket */}
               {leaderboardMode === "industry" && drilldownLabel ? (
-                <p className="flex items-center gap-1 truncate text-[11px] text-slate-500">
+                <p className="flex items-center gap-1 truncate t-data text-slate-500">
                   <button
                     type="button"
                     onClick={() => setDrilldownLabel(null)}
@@ -2393,12 +2372,12 @@ const ScannerView = memo(function ScannerView({
                   </button>
                   <span className="text-slate-600">›</span>
                   <span className="font-semibold text-slate-300">{drilldownLabel}</span>
-                  <span className="ml-1 rounded bg-terminal-elevated px-1 text-[9px] text-slate-500">
+                  <span className="ml-1 rounded bg-terminal-elevated px-1 t-micro text-slate-500">
                     {finvizFilteredRows.length} sub-industries
                   </span>
                 </p>
               ) : (
-                <p className="truncate text-[11px] text-slate-500">
+                <p className="truncate t-data text-slate-500">
                   {leaderboardMode === "industry"
                     ? "Click industry groups to expand/collapse sub-industries"
                     : "Theme performance + RS"}
@@ -2415,7 +2394,7 @@ const ScannerView = memo(function ScannerView({
                     setExpandedTheme(null);
                     setLeaderboardSubSpotlight(null);
                   }}
-                  className={`rounded-full px-3 py-1.5 text-[11px] font-semibold transition-colors ${
+                  className={`rounded-full px-3 py-1.5 t-data font-semibold transition-colors ${
                     leaderboardMode === "themes" ? "bg-accent/20 text-white" : "text-slate-400 hover:text-white"
                   }`}
                 >
@@ -2429,7 +2408,7 @@ const ScannerView = memo(function ScannerView({
                     setExpandedTheme(null);
                     setLeaderboardSubSpotlight(null);
                   }}
-                  className={`rounded-full px-3 py-1.5 text-[11px] font-semibold transition-colors ${
+                  className={`rounded-full px-3 py-1.5 t-data font-semibold transition-colors ${
                     leaderboardMode === "industry" ? "bg-accent/20 text-white" : "text-slate-400 hover:text-white"
                   }`}
                 >
@@ -2442,13 +2421,16 @@ const ScannerView = memo(function ScannerView({
                   value={themeQuery}
                   onChange={(e) => setThemeQuery(e.target.value)}
                   placeholder="Filter themes…"
-                  className="w-[200px] bg-transparent text-xs text-slate-200 placeholder:text-slate-600 focus:outline-none"
+                  className="w-[200px] bg-transparent text-xs text-slate-200 placeholder:text-slate-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-terminal-card"
                 />
               </div>
             </div>
           </header>
           <div className="fintech-scroll min-h-0 flex-1 overflow-auto">
-            <table className="w-full min-w-[1020px] border-separate border-spacing-0 text-left text-[11px]">
+            <table className="w-full min-w-[1020px] border-separate border-spacing-0 text-left t-data">
+              <caption className="sr-only">
+                Leaderboard of themes or industries with performance and relative strength columns.
+              </caption>
               <thead>
                 <tr>
                   {[
@@ -2463,7 +2445,7 @@ const ScannerView = memo(function ScannerView({
                     { label: "Qual%", key: "qual" as const },
                     { label: "Leaders", key: "leaders" as const },
                   ].map((h) => (
-                    <th key={h.label} className="sticky top-0 z-10 whitespace-nowrap border-b border-terminal-border bg-terminal-card px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+                    <th key={h.label} scope="col" className="sticky top-0 z-10 whitespace-nowrap border-b border-terminal-border bg-terminal-card px-3 py-2 t-label">
                       {h.key ? (
                         <button
                           type="button"
@@ -2478,7 +2460,7 @@ const ScannerView = memo(function ScannerView({
                           className="inline-flex items-center gap-1 hover:text-slate-300"
                         >
                           <span>{h.label}</span>
-                          <span className={`text-[9px] ${sortKey === h.key ? "text-accent" : "text-slate-600"}`}>
+                          <span className={`t-micro ${sortKey === h.key ? "text-accent" : "text-slate-600"}`}>
                             {sortKey === h.key ? (sortDir === "asc" ? "▲" : "▼") : "↕"}
                           </span>
                         </button>
@@ -2492,25 +2474,27 @@ const ScannerView = memo(function ScannerView({
               <tbody>
                 {finvizLbLoading && !finvizFilteredRows.length ? (
                   <tr>
-                    <td colSpan={10} className="px-3 py-8 text-center text-xs text-slate-500">
-                      <span className="animate-pulse">Loading Finviz {leaderboardMode} data…</span>
+                    <td colSpan={10}>
+                      <SkeletonRows count={8} />
                     </td>
                   </tr>
                 ) : finvizLbError && !finvizFilteredRows.length ? (
                   <tr>
-                    <td colSpan={10} className="px-3 py-6 text-center text-xs text-rose-300">
-                      Failed to load Finviz {leaderboardMode}: {finvizLbError}
+                    <td colSpan={10} className="px-3 py-4">
+                      <ErrorBanner
+                        title={`Failed to load ${leaderboardMode} data`}
+                        detail={finvizLbError}
+                      />
                     </td>
                   </tr>
                 ) : !finvizLbLoading && sortedLeaderboardRows.length === 0 ? (
                   <tr>
-                    <td colSpan={10} className="px-3 py-8 text-center">
-                      <p className="text-xs text-slate-500">
-                        No {leaderboardMode} data yet.
-                      </p>
-                      <p className="mt-1 text-[10px] text-slate-600">
-                        Retrying automatically every 15 s. Finviz may be rate-limiting the server.
-                      </p>
+                    <td colSpan={10}>
+                      <EmptyState
+                        icon={LayoutGrid}
+                        title={`No ${leaderboardMode} data yet`}
+                        subtitle="Retrying automatically every 15s. Finviz may be rate-limiting the server."
+                      />
                     </td>
                   </tr>
                 ) : leaderboardMode === "industry" ? (
@@ -2522,7 +2506,7 @@ const ScannerView = memo(function ScannerView({
                       <React.Fragment key={`group-${group.category}`}>
                         {/* Parent Category Row */}
                         <tr
-                          className="cursor-pointer border-b border-terminal-border/60 bg-slate-800/30 hover:bg-slate-700/40"
+                          className="cursor-pointer border-b border-terminal-border/60 bg-terminal-elevated/20 hover:bg-terminal-elevated/40"
                           onClick={() => setExpandedTheme(isOpen ? null : group.category)}
                         >
                           <td className="px-3 py-3 text-right font-mono tabular-nums text-slate-500">{groupIdx + 1}</td>
@@ -2531,7 +2515,7 @@ const ScannerView = memo(function ScannerView({
                               <span className={isOpen ? "rotate-90" : ""} style={{ transition: "transform 0.2s" }}>▶</span>
                               <div className="min-w-0">
                                 <p className="truncate font-bold text-slate-100">{group.category}</p>
-                                <p className="truncate text-[10px] text-slate-500">
+                                <p className="truncate t-micro text-slate-500">
                                   {group.industries.length} industries
                                 </p>
                               </div>
@@ -2597,12 +2581,12 @@ const ScannerView = memo(function ScannerView({
                                   <p className={`truncate font-medium ${industry.seed ? "text-slate-500 italic" : "text-slate-200"}`}>
                                     {industry.theme}
                                     {industry.seed && (
-                                      <span className="ml-1.5 rounded bg-slate-800 px-1 py-px font-mono text-[8px] not-italic text-slate-600">
+                                      <span className="ml-1.5 rounded bg-terminal-elevated/60 px-1 py-px t-mono not-italic text-slate-600">
                                         awaiting data
                                       </span>
                                     )}
                                   </p>
-                                  <p className="truncate text-[10px] text-slate-600">
+                                  <p className="truncate t-micro">
                                     <span className={industry.perf1W != null ? pctClass(industry.perf1W) : "text-slate-600"}>
                                       {fmtPct(industry.perf1W, 2)}
                                     </span>
@@ -2677,12 +2661,12 @@ const ScannerView = memo(function ScannerView({
                               <p className={`truncate font-medium ${t.seed ? "text-slate-500 italic" : "text-slate-100"}`}>
                                 {t.theme}
                                 {t.seed && (
-                                  <span className="ml-1.5 rounded bg-slate-800 px-1 py-px font-mono text-[8px] not-italic text-slate-600">
+                                  <span className="ml-1.5 rounded bg-terminal-elevated/60 px-1 py-px t-mono not-italic text-slate-600">
                                     awaiting data
                                   </span>
                                 )}
                               </p>
-                              <p className="flex flex-wrap items-center gap-x-1.5 truncate text-[10px] text-slate-600">
+                              <p className="flex flex-wrap items-center gap-x-1.5 truncate t-micro">
                                 {t.qualifiedCount}/{t.totalCount} · {t.sector ?? "—"} · {formatMoney(t.themeDollarVolume)}
                               </p>
                             </div>
@@ -2723,6 +2707,7 @@ const GappersView = memo(function GappersView({
   gappers,
   loading,
   error,
+  reload,
   filters,
   setFilters,
   gapScannerGradeByTicker,
@@ -2731,6 +2716,7 @@ const GappersView = memo(function GappersView({
   gappers: PremarketGappersPayload | null;
   loading: boolean;
   error: string | null;
+  reload: () => void;
   filters: {
     min_gap_pct: string;
     min_pm_vol_k: string;
@@ -2813,7 +2799,7 @@ const GappersView = memo(function GappersView({
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-terminal-bg p-4">
       <section className="mb-3 w-full shrink-0 rounded-xl border border-terminal-border bg-terminal-card px-4 py-3 shadow-sm">
-        <p className="mb-3 text-[10px] font-semibold uppercase tracking-wider text-amber-200/90">
+        <p className="mb-3 t-label text-amber-200/90">
           Pre-market screener · TradingView scanner (america)
         </p>
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
@@ -2828,13 +2814,13 @@ const GappersView = memo(function GappersView({
             ] as const
           ).map(([label, key]) => (
             <label key={key} className="flex flex-col gap-1">
-              <span className="text-[10px] font-semibold uppercase tracking-wide text-amber-200/85">{label}</span>
+              <span className="t-label text-amber-200/85">{label}</span>
               <input
                 type="text"
                 inputMode="decimal"
                 value={filters[key]}
                 onChange={(e) => setFilters({ ...filters, [key]: e.target.value })}
-                className="w-full rounded-md border border-terminal-border bg-terminal-bg px-2 py-1.5 font-mono text-xs text-slate-200 placeholder:text-slate-600 focus:border-accent/50 focus:outline-none"
+                className="w-full rounded-md border border-terminal-border bg-terminal-bg px-2 py-1.5 font-mono text-xs text-slate-200 placeholder:text-slate-600 focus:border-accent/50 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-terminal-card"
                 placeholder="0"
               />
             </label>
@@ -2853,13 +2839,13 @@ const GappersView = memo(function GappersView({
                 min_avg_dollar_vol_m: "0",
               })
             }
-            className="rounded-md border border-terminal-border bg-terminal-bg px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400 transition-colors hover:border-slate-500 hover:text-slate-200"
+            className="rounded-md border border-terminal-border bg-terminal-bg px-3 py-1 t-label text-slate-400 transition-colors hover:border-slate-500 hover:text-slate-200"
           >
             Reset
           </button>
-          <p className="text-right text-[10px] leading-relaxed text-slate-500">
+          <p className="text-right t-micro text-slate-500">
             <span className="text-slate-400">Scanned (ET):</span>{" "}
-            <span className="font-mono text-slate-400">{formatEt(gappers?.fetched_at_utc)}</span>
+            <span className="t-mono text-slate-400">{formatEt(gappers?.fetched_at_utc)}</span>
             <span className="mx-1.5 text-slate-600">·</span>
             <span>
               {gappers?.row_count ?? 0}
@@ -2872,22 +2858,32 @@ const GappersView = memo(function GappersView({
       <section className="mb-0 flex min-h-0 min-w-0 flex-1 flex-col rounded-xl border border-terminal-border bg-terminal-card shadow-sm">
         <header className="shrink-0 flex flex-wrap items-center justify-between gap-2 border-b border-terminal-border px-4 py-3">
           <div className="min-w-0">
-            <h2 className="text-sm font-semibold text-white">Pre-market Gappers</h2>
-            <p className="mt-0.5 max-w-[52rem] text-[10px] leading-snug text-slate-500">
+            <h2 className="t-page">Pre-market Gappers</h2>
+            <p className="mt-0.5 max-w-[52rem] t-micro text-slate-500">
               Sorted by premarket gap (desc). Grade column uses scanner audit (A+/A mapped to A/B).
             </p>
           </div>
+          <RefreshRow
+            onRefresh={() => void reload()}
+            loading={loading}
+            lastUpdatedAt={gappers?.fetched_at_utc ? new Date(gappers.fetched_at_utc).getTime() : null}
+          />
         </header>
 
         <div className="fintech-scroll min-h-0 min-w-0 flex-1 overflow-auto px-2 pb-3 pt-2">
           {loading && !(gappers?.rows && gappers.rows.length > 0) ? (
-            <p className="px-2 py-8 text-center text-xs text-slate-500">Loading gap scan…</p>
+            <PanelLoading label="Loading gap scan…" />
           ) : error ? (
-            <p className="px-2 py-8 text-center text-xs text-rose-400">{error}</p>
+            <ErrorBanner title="Gap scan failed" detail={error} onRetry={() => void reload()} />
           ) : !gappers?.rows?.length ? (
-            <p className="px-2 py-8 text-center text-xs text-slate-500">No rows — tighten filters or try again.</p>
+            <EmptyState
+              icon={Search}
+              title="No matching gappers"
+              subtitle="Loosen your filters or click Refresh."
+            />
           ) : (
-            <table className="w-full min-w-[1180px] border-separate border-spacing-0 text-left text-[11px]">
+            <table className="w-full min-w-[1180px] border-separate border-spacing-0 text-left t-data">
+              <caption className="sr-only">Pre-market gap scan results with sortable columns.</caption>
               <thead>
                 <tr>
                   {(
@@ -2906,7 +2902,8 @@ const GappersView = memo(function GappersView({
                   ).map((h) => (
                     <th
                       key={h.label}
-                      className="sticky top-0 z-10 whitespace-nowrap border-b border-terminal-border bg-terminal-card px-2 py-2 text-[10px] font-semibold uppercase tracking-wider text-slate-500"
+                      scope="col"
+                      className="sticky top-0 z-10 whitespace-nowrap border-b border-terminal-border bg-terminal-card px-2 py-2 t-label"
                     >
                       <button
                         type="button"
@@ -2917,10 +2914,10 @@ const GappersView = memo(function GappersView({
                             setSortDir(h.key === "ticker" || h.key === "sector" || h.key === "industry" ? "asc" : "desc");
                           }
                         }}
-                        className="inline-flex items-center gap-1 hover:text-slate-300"
+                        className="inline-flex w-full items-center gap-1 text-left hover:text-slate-300"
                       >
                         <span>{h.label}</span>
-                        <span className={`text-[9px] ${sortKey === h.key ? "text-accent" : "text-slate-600"}`}>
+                        <span className={`t-micro ${sortKey === h.key ? "text-accent" : "text-slate-600"}`}>
                           {sortKey === h.key ? (sortDir === "asc" ? "▲" : "▼") : "↕"}
                         </span>
                       </button>
@@ -2972,7 +2969,7 @@ const GappersView = memo(function GappersView({
                               href={finvizHref}
                               target="_blank"
                               rel="noopener noreferrer"
-                              className="rounded p-0.5 text-slate-400 hover:bg-slate-700/50 hover:text-white"
+                              className="rounded p-0.5 text-slate-400 hover:bg-terminal-elevated/40 hover:text-white"
                               title="Quote / fundamentals"
                             >
                               <Info className="h-3.5 w-3.5" />
@@ -3034,7 +3031,7 @@ const GappersView = memo(function GappersView({
                       <td className="border-b border-terminal-border/60 px-2 py-2 text-center text-slate-300">
                         <div className="flex flex-col items-center leading-tight">
                           <span className="tabular-nums">{mcapLines.main}</span>
-                          {mcapLines.tier ? <span className="text-[9px] font-medium text-slate-500">{mcapLines.tier}</span> : null}
+                          {mcapLines.tier ? <span className="t-micro font-medium text-slate-500">{mcapLines.tier}</span> : null}
                         </div>
                       </td>
                       <td className="border-b border-terminal-border/60 px-2 py-2 text-center align-middle">
@@ -3127,7 +3124,12 @@ export function ThemeDashboard() {
     min_mkt_cap_b: "0",
     min_avg_dollar_vol_m: "0",
   });
-  const { data: gappers, loading: gappersLoading, error: gappersError } = usePremarketGappers(gapFilters);
+  const {
+    data: gappers,
+    loading: gappersLoading,
+    error: gappersError,
+    reload: reloadGappers,
+  } = usePremarketGappers(gapFilters);
 
   const gapScannerGradeByTicker = useMemo(() => {
     const m = new Map<string, "A" | "B" | "C">();
@@ -3143,6 +3145,18 @@ export function ThemeDashboard() {
     }
     return m;
   }, [payload]);
+
+  useEffect(() => {
+    if (!focusTicker) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setFocusTicker(null);
+        setFocusTickerMeta(null);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [focusTicker]);
 
   if (error && !payload) {
     const retryIn = Math.max(0, Math.round(pollMs / 1000));
@@ -3173,7 +3187,7 @@ export function ThemeDashboard() {
             </span>
             <div className="min-w-0">
               <h1 className="truncate text-sm font-semibold tracking-tight text-white">Thematic Scanner</h1>
-              <p className="truncate text-[11px] text-slate-500">Pure-play clusters · 1M RS · Finviz · yfinance · VIX</p>
+              <p className="truncate t-data text-slate-500">Pure-play clusters · 1M RS · Finviz · yfinance · VIX</p>
             </div>
           </div>
           <div className="flex min-w-0 flex-1 items-center gap-2">
@@ -3184,7 +3198,7 @@ export function ThemeDashboard() {
             </div>
             <div className="ml-auto hidden items-center gap-3 rounded-xl border border-terminal-border bg-terminal-bg px-3 py-2 sm:flex">
               <div className="flex flex-col leading-tight">
-                <span className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+                <span className="flex items-center gap-2 t-label">
                   Live time
                   <span className={`inline-flex h-2 w-2 rounded-full ${status.cls}`} title={status.hint} />
                 </span>
@@ -3192,13 +3206,13 @@ export function ThemeDashboard() {
               </div>
               <div className="h-7 w-px bg-terminal-border/80" />
               <div className="flex flex-col leading-tight">
-                <span className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+                <span className="flex items-center gap-2 t-label">
                   Auto update
                   <span className={`inline-flex h-2 w-2 rounded-full ${status.cls}`} title={status.hint} />
                 </span>
                 <span className="font-mono text-[12px] font-semibold text-slate-200 tabular-nums">{autoRefreshCountdown}</span>
               </div>
-              <span className="hidden text-[10px] text-slate-600 lg:inline">
+              <span className="hidden t-micro lg:inline">
                 Last: <span className="font-mono">{formatEtClock(lastUpdatedAt)}</span>
               </span>
             </div>
@@ -3207,12 +3221,13 @@ export function ThemeDashboard() {
       </header>
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-        <div className="shrink-0 border-b border-terminal-border bg-terminal-bg pl-4 pr-[42px] py-3">
+        <nav className="shrink-0 border-b border-terminal-border bg-terminal-bg pl-4 pr-[42px] py-3" aria-label="Workspace tabs">
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
               onClick={() => setTab("scanner")}
-              className={`rounded-full border px-4 py-2 text-[11px] font-semibold transition-colors ${
+              aria-pressed={tab === "scanner"}
+              className={`rounded-full border px-4 py-2 t-data font-semibold transition-colors ${
                 tab === "scanner" ? "border-accent/40 bg-accent/20 text-white" : "border-terminal-border bg-terminal-bg text-slate-300 hover:border-slate-600 hover:text-white"
               }`}
             >
@@ -3221,7 +3236,8 @@ export function ThemeDashboard() {
             <button
               type="button"
               onClick={() => setTab("gappers")}
-              className={`rounded-full border px-4 py-2 text-[11px] font-semibold transition-colors ${
+              aria-pressed={tab === "gappers"}
+              className={`rounded-full border px-4 py-2 t-data font-semibold transition-colors ${
                 tab === "gappers" ? "border-accent/40 bg-accent/20 text-white" : "border-terminal-border bg-terminal-bg text-slate-300 hover:border-slate-600 hover:text-white"
               }`}
             >
@@ -3230,12 +3246,13 @@ export function ThemeDashboard() {
             <button
               type="button"
               onClick={() => setTab("breadth")}
-              className={`flex items-center gap-1.5 rounded-full border px-4 py-2 text-[11px] font-semibold transition-colors ${
+              aria-pressed={tab === "breadth"}
+              className={`flex items-center gap-1.5 rounded-full border px-4 py-2 t-data font-semibold transition-colors ${
                 tab === "breadth" ? "border-accent/40 bg-accent/20 text-white" : "border-terminal-border bg-terminal-bg text-slate-300 hover:border-slate-600 hover:text-white"
               }`}
             >
               <BarChart2 className="h-3.5 w-3.5" aria-hidden />
-              Market Breath
+              Market Breadth
             </button>
 
             <div className="relative ml-auto">
@@ -3253,7 +3270,9 @@ export function ThemeDashboard() {
                     closeThemeSearchRef.current = window.setTimeout(() => setThemeSearchOpen(false), 140);
                   }}
                   placeholder="Search ticker / company…"
-                  className="w-[180px] bg-transparent text-xs text-slate-200 placeholder:text-slate-600 focus:outline-none"
+                  aria-label="Search ticker or company"
+                  autoComplete="off"
+                  className="w-[180px] bg-transparent text-xs text-slate-200 placeholder:text-slate-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-terminal-bg"
                 />
                 {themeSearchQuery ? (
                   <button
@@ -3272,8 +3291,8 @@ export function ThemeDashboard() {
               {themeSearchOpen && themeSearchQuery.trim() ? (
                 <div className="absolute right-0 top-[44px] z-50 w-[340px] overflow-hidden rounded-xl border border-terminal-border bg-terminal-card shadow-xl">
                   <div className="px-3 py-2">
-                    {suggestLoading ? <p className="text-[11px] text-slate-500">Searching…</p> : null}
-                    {!suggestLoading && !suggest.length ? <p className="text-[11px] text-slate-500">No matches.</p> : null}
+                    {suggestLoading ? <p className="t-data text-slate-500">Searching…</p> : null}
+                    {!suggestLoading && !suggest.length ? <p className="t-data text-slate-500">No matches.</p> : null}
                   </div>
 
                   {suggest.length ? (
@@ -3297,7 +3316,7 @@ export function ThemeDashboard() {
                                 }`}
                               >
                                 <span className="font-mono text-[12px] font-semibold text-accent">{String(r.ticker || "").toUpperCase()}</span>
-                                <span className="truncate text-[10px] text-slate-500">{r.name}</span>
+                                <span className="truncate t-micro text-slate-500">{r.name}</span>
                               </button>
                             );
                           })}
@@ -3306,15 +3325,15 @@ export function ThemeDashboard() {
 
                       <div className="border-t border-terminal-border px-3 py-3">
                         {intelLoading ? (
-                          <p className="text-[11px] text-slate-500">Loading…</p>
+                          <p className="t-data text-slate-500">Loading…</p>
                         ) : intel ? (
                           <div className="space-y-2">
                             <div>
                               <div className="flex items-baseline justify-between gap-3">
                                 <p className="font-mono text-[12px] font-semibold text-white">{intel.ticker}</p>
                                 <div className="flex items-baseline gap-3">
-                                  <span className="font-mono text-[11px] font-semibold text-slate-200 tabular-nums">{fmtPrice(intel.close)}</span>
-                                  <span className={`font-mono text-[11px] font-semibold tabular-nums ${pctClass(intel.today_return_pct ?? 0)}`}>
+                                  <span className="t-mono font-semibold text-slate-200">{fmtPrice(intel.close)}</span>
+                                  <span className={`t-mono font-semibold ${pctClass(intel.today_return_pct ?? 0)}`}>
                                     {(() => {
                                       const close = intel.close ?? null;
                                       const pct = Number.isFinite(intel.today_return_pct) ? Number(intel.today_return_pct) : null;
@@ -3326,25 +3345,25 @@ export function ThemeDashboard() {
                                       return `${sign}${fmtPrice(chg)}`;
                                     })()}
                                   </span>
-                                  <span className={`font-mono text-[11px] tabular-nums ${pctClass(intel.today_return_pct ?? 0)}`}>{fmtPct(intel.today_return_pct, 2)}</span>
+                                  <span className={`t-mono ${pctClass(intel.today_return_pct ?? 0)}`}>{fmtPct(intel.today_return_pct, 2)}</span>
                                 </div>
                               </div>
-                              <p className="mt-0.5 text-[11px] text-slate-400">{intel.name}</p>
+                              <p className="mt-0.5 t-data text-slate-400">{intel.name}</p>
                             </div>
                             <div className="h-px bg-terminal-border" />
-                            <div className="grid grid-cols-[72px_1fr] gap-x-3 gap-y-1 text-[11px]">
-                              <p className="text-slate-500">Sector</p>
+                            <div className="grid grid-cols-[72px_1fr] gap-x-3 gap-y-1 t-data">
+                              <p className="t-label">Sector</p>
                               <p className="truncate font-semibold text-slate-200">{intel.sector}</p>
-                              <p className="text-slate-500">Industry</p>
+                              <p className="t-label">Industry</p>
                               <p className="truncate font-semibold text-slate-200">{intel.industry}</p>
-                              <p className="text-slate-500">Theme</p>
+                              <p className="t-label">Theme</p>
                               <p className="truncate font-semibold text-sky-200">{intel.theme ?? "—"}</p>
-                              <p className="text-slate-500">Sub-Theme</p>
+                              <p className="t-label">Sub-Theme</p>
                               <p className="truncate font-semibold text-violet-200">{intel.subtheme ?? "—"}</p>
                             </div>
                           </div>
                         ) : (
-                          <p className="text-[11px] text-slate-500">Select a ticker to view details.</p>
+                          <p className="t-data text-slate-500">Select a ticker to view details.</p>
                         )}
                       </div>
                     </div>
@@ -3353,9 +3372,13 @@ export function ThemeDashboard() {
               ) : null}
             </div>
           </div>
-        </div>
+        </nav>
 
-        <div className="flex min-h-0 min-w-0 flex-1 flex-row overflow-x-auto overflow-y-hidden">
+        <main
+          id="main-content"
+          className="flex min-h-0 min-w-0 flex-1 flex-row overflow-x-auto overflow-y-hidden"
+          aria-label="Dashboard workspace"
+        >
           <div className="flex h-full min-h-0 min-w-0 flex-1 basis-0 flex-col overflow-hidden bg-terminal-bg p-0">
             {tab === "scanner" ? (
               <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden p-4">
@@ -3384,6 +3407,7 @@ export function ThemeDashboard() {
                 gappers={gappers}
                 loading={gappersLoading}
                 error={gappersError}
+                reload={reloadGappers}
                 filters={gapFilters}
                 setFilters={setGapFilters}
                 gapScannerGradeByTicker={gapScannerGradeByTicker}
@@ -3404,7 +3428,7 @@ export function ThemeDashboard() {
               }}
             />
           ) : null}
-        </div>
+        </main>
       </div>
     </div>
   );
