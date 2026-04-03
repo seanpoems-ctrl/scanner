@@ -7,11 +7,13 @@ import { EmptyState } from "./ui/EmptyState";
 import { PanelLoading } from "./ui/SkeletonRows";
 import { RefreshRow } from "./ui/RefreshRow";
 import { RsSparkline } from "./ui/RsSparkline";
+import { RotationHeatmap } from "./RotationHeatmap";
 
 export type { RotationHistoryPoint, RotationThemeRow } from "../hooks/useRotationSnapshot";
 
 export function RotationView() {
   const [days, setDays] = useState(10);
+  const [view, setView] = useState<"table" | "heatmap">("table");
   const { data, loading, error, reload, lastUpdatedAt } = useRotationSnapshot(days);
 
   const themes = useMemo(() => (Array.isArray(data?.themes) ? data!.themes! : []), [data]);
@@ -31,21 +33,45 @@ export function RotationView() {
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <div className="flex items-center gap-1.5">
-              {[7, 10, 14, 21, 30].map((d) => (
-                <button
-                  key={d}
-                  type="button"
-                  onClick={() => setDays(d)}
-                  className={`rounded-md border px-2 py-1 t-label transition-colors ${
-                    days === d
-                      ? "border-accent/40 bg-accent/15 text-white"
-                      : "border-terminal-border bg-terminal-bg text-slate-400 hover:border-slate-500 hover:text-white"
-                  }`}
-                >
-                  {d}d
-                </button>
-              ))}
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="flex items-center gap-1.5">
+                {[7, 10, 14, 21, 30].map((d) => (
+                  <button
+                    key={d}
+                    type="button"
+                    onClick={() => setDays(d)}
+                    className={`rounded-md border px-2 py-1 t-label transition-colors ${
+                      days === d
+                        ? "border-accent/40 bg-accent/15 text-white"
+                        : "border-terminal-border bg-terminal-bg text-slate-400 hover:border-slate-500 hover:text-white"
+                    }`}
+                  >
+                    {d}d
+                  </button>
+                ))}
+              </div>
+              <div className="hidden h-5 w-px bg-terminal-border sm:block" aria-hidden />
+              <div className="flex items-center gap-1 rounded-md border border-terminal-border bg-terminal-bg p-0.5">
+                {(
+                  [
+                    ["table", "Table"],
+                    ["heatmap", "Heatmap"],
+                  ] as const
+                ).map(([key, label]) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => setView(key)}
+                    className={`rounded px-2 py-1 text-xs font-semibold transition-colors ${
+                      view === key
+                        ? "bg-accent/20 text-white shadow-sm"
+                        : "text-slate-500 hover:text-slate-200"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
             </div>
             <RefreshRow onRefresh={() => void reload()} loading={loading} lastUpdatedAt={lastUpdatedAt} />
           </div>
@@ -69,6 +95,8 @@ export function RotationView() {
               title="No rotation history yet"
               subtitle="Open Thematic Scanner once so the backend can record a daily snapshot, then return here."
             />
+          ) : view === "heatmap" ? (
+            <RotationHeatmap themes={themes} />
           ) : (
             <table className="w-full min-w-[900px] border-separate border-spacing-0 text-left t-data">
               <caption className="sr-only">Theme relative strength rotation and momentum over the selected window.</caption>
