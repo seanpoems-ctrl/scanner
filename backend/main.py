@@ -212,6 +212,10 @@ _OCEAN_CACHE: dict[str, Any] | None = None
 _OCEAN_CACHE_TS: float = 0.0
 _OCEAN_CACHE_TTL_SEC = 20 * 60.0  # recompute at most every 20 min (Yahoo-heavy call)
 
+_STOCKBEE_BREADTH_CACHE: dict[str, Any] | None = None
+_STOCKBEE_BREADTH_CACHE_TS: float = 0.0
+_STOCKBEE_BREADTH_TTL_SEC = 30 * 60.0  # published Google Sheet; refresh at most every 30 min
+
 # Cache ticker intel to avoid Yahoo throttling.
 _TICKER_INTEL_CACHE: dict[str, tuple[float, dict]] = {}
 _TICKER_INTEL_TTL_SEC = 6 * 60.0
@@ -767,6 +771,62 @@ async def get_market_ocean() -> dict:
     _OCEAN_CACHE = result
     _OCEAN_CACHE_TS = now
     return result
+
+
+def _leading_themes_finviz_proxy() -> list[dict[str, Any]]:
+    """
+    Top 5 Finviz map themes by 1D % from the last-known-good themes snapshot.
+    Complements Stockbee aggregates; not a ticker-level overlap with Stockbee +4% counts.
+    """
+    hit = _CACHE.get("themes")
+    if not hit:
+        return []
+    themes = hit[1].get("themes") or []
+    ranked: list[dict[str, Any]] = []
+    for t in themes:
+        if not isinstance(t, dict) or t.get("seed"):
+            continue
+        p = t.get("perf1D")
+        if p is None or not isinstance(p, (int, float)):
+            continue
+        if not isinstance(p, float):
+            p = float(p)
+        ranked.append(
+            {
+                "theme": str(t.get("theme") or "—"),
+                "perf1D": round(p, 2),
+                "sector": t.get("sector"),
+            }
+        )
+    ranked.sort(key=lambda x: x["perf1D"], reverse=True)
+    return ranked[:5]
+
+
+@app.get("/api/market-breadth")
+async def get_market_breadth() -> dict:
+    """
+    Stockbee Market Monitor table (published Google Sheet linked from stockbee.blogspot.com/p/mm.html).
+    Rows are sorted by date descending. Includes Finviz 1D theme leaders as a separate proxy widget.
+    """
+    global _STOCKBEE_BREADTH_CACHE, _STOCKBEE_BREADTH_CACHE_TS
+    now = monotonic()
+    if _STOCKBEE_BREADTH_CACHE is not None and (now - _STOCKBEE_BREADTH_CACHE_TS) < _STOCKBEE_BREADTH_TTL_SEC:
+        return _STOCKBEE_BREADTH_CACHE
+
+    try:
+        from backend.stockbee_breadth import fetch_stockbee_market_monitor_sync as _fetch_sb
+    except ImportError:
+        from stockbee_breadth import fetch_stockbee_market_monitor_sync as _fetch_sb
+
+    base = await asyncio.to_thread(_fetch_sb)
+    base["leading_themes"] = _leading_themes_finviz_proxy()
+    base["leading_themes_note"] = (
+        "Top Finviz theme map names by 1D % — proxy for sector leadership; "
+        "not derived from Stockbee +4% counts."
+    )
+    _STOCKBEE_BREADTH_CACHE = base
+    _STOCKBEE_BREADTH_CACHE_TS = now
+    return base
 
 
 @app.get("/api/industry/subindustry-movers")

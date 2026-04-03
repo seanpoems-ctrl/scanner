@@ -10,6 +10,7 @@ import {
   YAxis,
 } from "recharts";
 import { Activity, RefreshCw, Rocket, TrendingUp, Waves } from "lucide-react";
+import MarketBreadthReport, { type MarketBreadthPayload } from "./MarketBreadthReport";
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim() || "http://127.0.0.1:8000";
 
@@ -203,6 +204,7 @@ function SpeedboatChartTooltip({ active, payload, label, threshold }: TooltipPro
 
 const MarketBreadth = memo(function MarketBreadth() {
   const [data, setData] = useState<OceanPayload | null>(null);
+  const [stockbee, setStockbee] = useState<MarketBreadthPayload | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastFetchedAt, setLastFetchedAt] = useState<string | null>(null);
@@ -216,11 +218,20 @@ const MarketBreadth = memo(function MarketBreadth() {
     const ctrl = new AbortController();
     abortRef.current = ctrl;
     try {
-      const r = await fetch(`${API_BASE_URL}/api/market-ocean`, { signal: ctrl.signal });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const json = (await r.json()) as OceanPayload;
+      const [ro, rsb] = await Promise.all([
+        fetch(`${API_BASE_URL}/api/market-ocean`, { signal: ctrl.signal }),
+        fetch(`${API_BASE_URL}/api/market-breadth`, { signal: ctrl.signal }),
+      ]);
+      if (!ro.ok) throw new Error(`market-ocean HTTP ${ro.status}`);
+      const json = (await ro.json()) as OceanPayload;
       setData(json);
       setLastFetchedAt(json.fetched_at_utc ?? null);
+      try {
+        const sb = (await rsb.json()) as MarketBreadthPayload;
+        setStockbee(!rsb.ok ? { ...sb, ok: false, detail: sb.detail ?? `HTTP ${rsb.status}` } : sb);
+      } catch {
+        setStockbee({ ok: false, rows: [], detail: `market-breadth HTTP ${rsb.status}` });
+      }
     } catch (e: unknown) {
       if (e instanceof Error && e.name === "AbortError") return;
       setError(e instanceof Error ? e.message : String(e));
@@ -484,6 +495,8 @@ const MarketBreadth = memo(function MarketBreadth() {
           {data?.universe_size ? <span className="ml-auto">Universe: {data.universe_size} tickers</span> : null}
         </div>
       </div>
+
+      <MarketBreadthReport data={stockbee} />
     </div>
   );
 });
