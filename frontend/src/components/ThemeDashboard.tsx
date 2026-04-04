@@ -731,6 +731,11 @@ const SpotlightDrawer = memo(function SpotlightDrawer({
         aria-hidden
       />
       <div
+        data-e2e="spotlight-drawer"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Theme spotlight drawer"
+        aria-hidden={!isOpen}
         className={`fixed bottom-0 right-0 top-0 z-40 flex w-80 flex-col border-l border-terminal-border bg-terminal-card shadow-2xl transition-transform duration-200 ${
           isOpen ? "translate-x-0" : "translate-x-full"
         }`}
@@ -2813,6 +2818,7 @@ const ScannerView = memo(function ScannerView({
               <div className="flex items-center gap-1 rounded-full border border-terminal-border bg-terminal-bg p-1">
                 <button
                   type="button"
+                  data-e2e="lb-mode-themes"
                   onClick={() => {
                     setLeaderboardMode("themes");
                     setDrilldownLabel(null);
@@ -2827,6 +2833,7 @@ const ScannerView = memo(function ScannerView({
                 </button>
                 <button
                   type="button"
+                  data-e2e="lb-mode-industry"
                   onClick={() => {
                     setLeaderboardMode("industry");
                     setDrilldownLabel(null);
