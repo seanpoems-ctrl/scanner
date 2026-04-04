@@ -3,9 +3,7 @@ import { AlertTriangle, BarChart2, BarChart3, ChevronRight, Info, LayoutGrid, Li
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import MarketBreadth from "./MarketBreadth";
 import { useWatchlist } from "../hooks/useWatchlist";
-import { useSkyteRsIndustries } from "../hooks/useSkyteRsIndustries";
 import { API_BASE_URL } from "../lib/apiBase";
-import { lookupSkyteIndustry } from "../lib/skyteRs";
 import { formatMoney, fmtPct, fmtPrice, pctClass } from "../lib/formatters";
 import { RotationView } from "./RotationView";
 import { WatchlistDrawer } from "./WatchlistDrawer";
@@ -212,9 +210,21 @@ function avgFiniteField(rows: ApiTheme[], pick: (r: ApiTheme) => number | null |
   return vals.length ? vals.reduce((s, v) => s + v, 0) / vals.length : null;
 }
 
+const SORT_OPTIONS = [
+  { value: "rs", label: "Sort: RS Score" },
+  { value: "1d", label: "Sort: 1D %" },
+  { value: "1w", label: "Sort: 1W %" },
+  { value: "1m", label: "Sort: 1M %" },
+  { value: "3m", label: "Sort: 3M %" },
+  { value: "6m", label: "Sort: 6M %" },
+] as const;
+
+type LbSortKey = (typeof SORT_OPTIONS)[number]["value"];
+
 type ThemeParentGroup = {
   parent: string;
   rows: ApiTheme[];
+  totalStockCount: number;
   avgRs: number;
   avgPerf1D: number | null;
   avgPerf1W: number | null;
@@ -223,6 +233,26 @@ type ThemeParentGroup = {
   avgPerf6M: number | null;
   sortScore: number;
 };
+
+function getRowSortValue(row: ApiTheme, key: LbSortKey, rsMap: Map<string, number>): number | null {
+  if (key === "rs") return rsMap.get(row.theme) ?? null;
+  if (key === "1d") return row.perf1D ?? null;
+  if (key === "1w") return row.perf1W ?? null;
+  if (key === "1m") return row.perf1M ?? null;
+  if (key === "3m") return row.perf3M ?? null;
+  if (key === "6m") return row.perf6M ?? null;
+  return null;
+}
+
+function getParentLbSortValue(g: ThemeParentGroup, key: LbSortKey): number {
+  if (key === "rs") return g.avgRs;
+  if (key === "1d") return g.avgPerf1D ?? -Infinity;
+  if (key === "1w") return g.avgPerf1W ?? -Infinity;
+  if (key === "1m") return g.avgPerf1M ?? -Infinity;
+  if (key === "3m") return g.avgPerf3M ?? -Infinity;
+  if (key === "6m") return g.avgPerf6M ?? -Infinity;
+  return -Infinity;
+}
 
 /** Rank-based 1–99 percentile of raw `relativeStrength1M` across the leaderboard universe (for RS column coloring). */
 function normaliseRs(themes: ApiTheme[]): Map<string, number> {
@@ -252,6 +282,7 @@ function groupThemesByParent(themes: ApiTheme[], rsPercentileMap: Map<string, nu
     map.get(p)!.push(t);
   }
   return [...map.entries()].map(([parent, rows]) => {
+    const totalStockCount = rows.reduce((sum, r) => sum + (r.totalCount ?? 0), 0);
     const pctVals = rows.map((r) => rsPercentileMap.get(r.theme)).filter((x): x is number => x != null && Number.isFinite(x));
     const avgRs = pctVals.length ? pctVals.reduce((s, v) => s + v, 0) / pctVals.length : 0;
     const avgPerf1D = avgFiniteField(rows, (r) => r.perf1D);
@@ -263,6 +294,7 @@ function groupThemesByParent(themes: ApiTheme[], rsPercentileMap: Map<string, nu
     return {
       parent,
       rows,
+      totalStockCount,
       avgRs,
       avgPerf1D,
       avgPerf1W,
@@ -272,6 +304,109 @@ function groupThemesByParent(themes: ApiTheme[], rsPercentileMap: Map<string, nu
       sortScore,
     };
   });
+}
+
+function sortSpotlightStocksAll(stocks: ApiStock[]): ApiStock[] {
+  const gradeRank = (g: string | undefined) => (g === "A+" ? 2 : g === "A" ? 1 : 0);
+  return [...stocks].sort((a, b) => {
+    const ga = gradeRank(a.gradeLabel);
+    const gb = gradeRank(b.gradeLabel);
+    if (gb !== ga) return gb - ga;
+    return (b.avg_dollar_volume ?? 0) - (a.avg_dollar_volume ?? 0);
+  });
+}
+
+function SpotlightStockGradeBadge({ grade }: { grade: ApiStock["gradeLabel"] }) {
+  if (grade === "A+") {
+    return (
+      <span className="inline-flex h-5 min-w-[1.25rem] items-center justify-center rounded border border-emerald-500/50 bg-emerald-500/15 px-1 t-mono text-[10px] font-bold text-emerald-300">
+        A+
+      </span>
+    );
+  }
+  if (grade === "A") {
+    return (
+      <span className="inline-flex h-5 min-w-[1.25rem] items-center justify-center rounded border border-sky-500/45 bg-sky-500/12 px-1 t-mono text-[10px] font-bold text-sky-200">
+        A
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex h-5 min-w-[1.25rem] items-center justify-center rounded border border-slate-600/80 bg-terminal-elevated/50 px-1 t-mono text-[10px] text-slate-500">
+      —
+    </span>
+  );
+}
+
+function SpotlightAllStocksSection({
+  totalCount,
+  stocks,
+  open,
+  onToggle,
+  onSelectTicker,
+  themeCtx,
+}: {
+  totalCount: number;
+  stocks: ApiStock[];
+  open: boolean;
+  onToggle: () => void;
+  onSelectTicker: (ticker: string, meta?: { theme?: string | null; sector?: string | null; grade?: string | null }) => void;
+  themeCtx: { theme?: string; sector?: string };
+}) {
+  const rows = useMemo(() => sortSpotlightStocksAll(stocks).slice(0, 30), [stocks]);
+  return (
+    <div className="shrink-0">
+      <button
+        type="button"
+        onClick={onToggle}
+        className="flex w-full items-center justify-between border-t border-terminal-border px-4 py-2 text-left transition-colors hover:bg-terminal-elevated/30"
+        aria-expanded={open}
+      >
+        <span className="t-micro uppercase tracking-widest text-slate-500">All Stocks ({totalCount})</span>
+        <ChevronRight
+          size={12}
+          className={`shrink-0 text-slate-500 transition-transform ${open ? "rotate-90" : ""}`}
+          aria-hidden
+        />
+      </button>
+      {open ? (
+        <div className="max-h-[300px] overflow-y-auto border-t border-terminal-border/60 px-4 py-2">
+          {rows.length ? (
+            <div className="space-y-0">
+              {rows.map((s) => {
+                const symU = String(s.ticker || "").toUpperCase();
+                const todayRaw = s.today_return_pct;
+                const todayOk = todayRaw != null && Number.isFinite(todayRaw);
+                return (
+                  <div
+                    key={symU}
+                    className="flex items-center gap-2 border-b border-terminal-border/30 py-2 text-[11px] last:border-b-0"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => onSelectTicker(symU, { theme: themeCtx.theme, sector: themeCtx.sector, grade: s.gradeLabel })}
+                      className="min-w-0 max-w-[120px] shrink-0 truncate font-mono font-bold text-accent hover:underline"
+                    >
+                      {s.ticker}
+                    </button>
+                    <SpotlightStockGradeBadge grade={s.gradeLabel} />
+                    <span className={`t-mono shrink-0 whitespace-nowrap tabular-nums ${todayOk ? pctClass(todayRaw) : "text-slate-600"}`}>
+                      {todayOk ? `${todayRaw >= 0 ? "+" : ""}${todayRaw.toFixed(2)}%` : "—"}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate text-right t-mono whitespace-nowrap tabular-nums text-slate-400">
+                      {formatMoney(s.avg_dollar_volume)}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <p className="t-micro text-slate-500">No stock list for this theme.</p>
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 function ThemePerfStrip4({ t }: { t: Pick<ApiTheme, "perf1D" | "perf1W" | "perf1M" | "perf6M"> | null | undefined }) {
@@ -2081,21 +2216,20 @@ const ScannerView = memo(function ScannerView({
   onSelectTicker: (ticker: string, meta?: TickerDrawerMeta) => void;
 }) {
   const [leaderboardMode, setLeaderboardMode] = useState<"themes" | "industry">("themes");
-  const skyteRsEnabled = leaderboardMode === "industry";
-  const { lookupMap: skyteIndustryMap, loading: skyteRsLoading } = useSkyteRsIndustries(skyteRsEnabled);
   // drilldownLabel: when set (industry mode only), filter rows to this thematic bucket.
   const [drilldownLabel, setDrilldownLabel] = useState<string | null>(null);
   // expandedTheme: for accordion-style industry grouping
   const [expandedTheme, setExpandedTheme] = useState<string | null>(null);
   const [leaderboardSubSpotlight, setLeaderboardSubSpotlight] = useState<LeaderboardSubSpotlight | null>(null);
   const [expandedParents, setExpandedParents] = useState<Set<string>>(new Set());
+  const [spotlightStocksOpen, setSpotlightStocksOpen] = useState(false);
   const now_et_h = new Date().toLocaleString("en-US", { timeZone: "America/New_York", hour: "numeric", hour12: false });
   const [briefMode, setBriefMode] = useState<"pre" | "post">(Number(now_et_h) < 17 ? "pre" : "post");
   const [sortKey, setSortKey] = useState<
-    "theme" | "perf1D" | "perf1W" | "perf1M" | "perf3M" | "perf6M" | "rs1m" | "qual" | "leaders" | null
+    "theme" | "perf1D" | "perf1W" | "perf1M" | "perf3M" | "perf6M" | "rs1m" | "leaders" | null
   >(null);
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
-  const [lbSortKey, setLbSortKey] = useState<"rs" | "6m" | "3m" | "1m">("rs");
+  const [lbSortKey, setLbSortKey] = useState<LbSortKey>("rs");
 
   const themes = payload.themes ?? [];
   const sortedThemes = useMemo(() => {
@@ -2123,6 +2257,10 @@ const ScannerView = memo(function ScannerView({
   useEffect(() => {
     setExpandedParents(new Set());
   }, [leaderboardMode]);
+
+  useEffect(() => {
+    setSpotlightStocksOpen(false);
+  }, [spotlightThemeName, leaderboardSubSpotlight?.kind, leaderboardSubSpotlight?.theme]);
 
   const toggleParent = useCallback((parent: string) => {
     setExpandedParents((prev) => {
@@ -2206,7 +2344,6 @@ const ScannerView = memo(function ScannerView({
           if (sortKey === "perf3M") return (num(a.perf3M) - num(b.perf3M)) * dir;
           if (sortKey === "perf6M") return (num(a.perf6M) - num(b.perf6M)) * dir;
           if (sortKey === "rs1m") return (num(a.relativeStrength1M) - num(b.relativeStrength1M)) * dir;
-          if (sortKey === "qual") return (num(a.relativeStrengthQualifierRatio) - num(b.relativeStrengthQualifierRatio)) * dir;
           return 0;
         });
       } else {
@@ -2226,7 +2363,6 @@ const ScannerView = memo(function ScannerView({
       const avgPerf3M = validIndustries.length > 0 ? validIndustries.reduce((sum, i) => sum + (i.perf3M ?? 0), 0) / validIndustries.length : null;
       const avgPerf6M = validIndustries.length > 0 ? validIndustries.reduce((sum, i) => sum + (i.perf6M ?? 0), 0) / validIndustries.length : null;
       const avgRS = validIndustries.length > 0 ? validIndustries.reduce((sum, i) => sum + (i.relativeStrength1M ?? 0), 0) / validIndustries.length : null;
-      const avgQual = validIndustries.length > 0 ? validIndustries.reduce((sum, i) => sum + (i.relativeStrengthQualifierRatio ?? 0), 0) / validIndustries.length : null;
 
       return {
         category,
@@ -2237,7 +2373,6 @@ const ScannerView = memo(function ScannerView({
         avgPerf3M,
         avgPerf6M,
         avgRS,
-        avgQual
       };
     });
 
@@ -2255,7 +2390,6 @@ const ScannerView = memo(function ScannerView({
           case "perf3M": return group.avgPerf3M ?? -Infinity;
           case "perf6M": return group.avgPerf6M ?? -Infinity;
           case "rs1m": return group.avgRS ?? -Infinity;
-          case "qual": return group.avgQual ?? -Infinity;
           default: return group.avgPerf1W ?? -Infinity;
         }
       };
@@ -2286,7 +2420,6 @@ const ScannerView = memo(function ScannerView({
         return aKey.localeCompare(bKey) * dir;
       }
       if (sortKey === "rs1m") return (num(a.relativeStrength1M) - num(b.relativeStrength1M)) * dir;
-      if (sortKey === "qual") return (num(a.relativeStrengthQualifierRatio) - num(b.relativeStrengthQualifierRatio)) * dir;
       const av = sortKey === "perf1D" ? a.perf1D : sortKey === "perf1W" ? a.perf1W : sortKey === "perf1M" ? a.perf1M : sortKey === "perf3M" ? a.perf3M : a.perf6M;
       const bv = sortKey === "perf1D" ? b.perf1D : sortKey === "perf1W" ? b.perf1W : sortKey === "perf1M" ? b.perf1M : sortKey === "perf3M" ? b.perf3M : b.perf6M;
       return (num(av) - num(bv)) * dir;
@@ -2297,13 +2430,20 @@ const ScannerView = memo(function ScannerView({
   const themesLeaderboardGroups = useMemo(() => {
     if (leaderboardMode !== "themes") return [];
     const groups = groupThemesByParent(sortedLeaderboardRows.slice(0, 160), rsPercentileMap);
-    return [...groups].sort((a, b) => {
-      if (lbSortKey === "6m") return (b.avgPerf6M ?? -Infinity) - (a.avgPerf6M ?? -Infinity);
-      if (lbSortKey === "3m") return (b.avgPerf3M ?? -Infinity) - (a.avgPerf3M ?? -Infinity);
-      if (lbSortKey === "1m") return (b.avgPerf1M ?? -Infinity) - (a.avgPerf1M ?? -Infinity);
-      return b.avgRs - a.avgRs;
-    });
+    return [...groups].sort((a, b) => getParentLbSortValue(b, lbSortKey) - getParentLbSortValue(a, lbSortKey));
   }, [leaderboardMode, sortedLeaderboardRows, rsPercentileMap, lbSortKey]);
+
+  const rsColLabel =
+    (
+      {
+        rs: "RS Score",
+        "1d": "1D %",
+        "1w": "1W %",
+        "1m": "1M %",
+        "3m": "3M %",
+        "6m": "6M %",
+      } as const satisfies Record<LbSortKey, string>
+    )[lbSortKey] ?? "RS Score";
 
   const rsRows = useMemo(() => {
     return sortedThemes
@@ -2397,18 +2537,22 @@ const ScannerView = memo(function ScannerView({
       </div>
 
       {/* Middle: RS + Spotlight + Constituents */}
-      <div className="fintech-scroll flex w-[420px] min-w-[420px] shrink-0 flex-col gap-3 overflow-y-auto pr-1">
-        <RsSnapshot rows={rsRows} />
-        <div className="min-h-[320px] overflow-hidden rounded-xl border border-terminal-border bg-terminal-card shadow-sm">
+      <div className="flex h-full min-h-0 w-[420px] min-w-[420px] shrink-0 flex-col gap-3 overflow-hidden pr-1">
+        <div className="shrink-0">
+          <RsSnapshot rows={rsRows} />
+        </div>
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-terminal-border bg-terminal-card shadow-sm">
           {leaderboardSubSpotlight ? (
             <>
-              <div className={`px-4 pb-3.5 pt-3 ${subIndustryBannerShellClass(leaderboardSubSpotlight.perf1D)}`}>
+              <div className={`shrink-0 px-4 pb-3.5 pt-3 ${subIndustryBannerShellClass(leaderboardSubSpotlight.perf1D)}`}>
                 <p className="t-micro font-semibold uppercase tracking-widest text-white/55">Thematic spotlight</p>
                 <div className="mt-2 flex items-start justify-between gap-2">
                   <div className="flex min-w-0 flex-1 items-start gap-2.5">
                     <LayoutGrid className="mt-0.5 h-4 w-4 shrink-0 text-white/85" aria-hidden />
                     <div className="min-w-0">
-                      <p className="truncate text-[13px] font-bold leading-tight text-white">{leaderboardSubSpotlight.theme}</p>
+                      <p className="max-w-[260px] truncate text-[13px] font-bold leading-tight text-white">
+                        {leaderboardSubSpotlight.theme}
+                      </p>
                       <p className="mt-1 flex items-center gap-1 font-mono text-xs font-semibold tabular-nums text-white/95">
                         {leaderboardSubSpotlight.perf1D != null && Number.isFinite(leaderboardSubSpotlight.perf1D) ? (
                           leaderboardSubSpotlight.perf1D > 0 ? (
@@ -2440,7 +2584,9 @@ const ScannerView = memo(function ScannerView({
                   </span>
                 </div>
               </div>
-              <div className="space-y-3 px-3 py-3">
+              <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+                <div className="min-h-0 flex-1 overflow-y-auto">
+                  <div className="space-y-3 px-3 py-3">
                 <div className="grid grid-cols-3 gap-2">
                   {(
                     [
@@ -2561,36 +2707,30 @@ const ScannerView = memo(function ScannerView({
                         </div>
                       </div>
                     </div>
-                    <div>
-                      <p className="mb-2 t-label">All stocks</p>
-                      <div className="max-h-36 overflow-y-auto rounded-lg border border-terminal-border/60 bg-terminal-bg/40 p-2">
-                        {industrySpotlightMoverStats?.rows?.length ? (
-                          <div className="flex flex-wrap gap-1.5">
-                            {[...industrySpotlightMoverStats.rows]
-                              .sort((a, b) => a.ticker.localeCompare(b.ticker))
-                              .map((r) => (
-                                <span
-                                  key={`cloud-${r.ticker}`}
-                                  className="rounded-md border border-slate-700/90 bg-terminal-elevated/80 px-2 py-1 t-mono font-medium text-slate-200"
-                                >
-                                  {r.ticker}
-                                </span>
-                              ))}
-                          </div>
-                        ) : (
-                          <p className="t-micro">No ticker universe yet.</p>
-                        )}
-                      </div>
-                    </div>
                   </>
                 )}
+                  </div>
+                </div>
+                <SpotlightAllStocksSection
+                  totalCount={subSpotlightThemeRow?.totalCount ?? leaderboardSubSpotlight.totalCount}
+                  stocks={subSpotlightThemeRow?.stocks ?? []}
+                  open={spotlightStocksOpen}
+                  onToggle={() => setSpotlightStocksOpen((o) => !o)}
+                  onSelectTicker={onSelectTicker}
+                  themeCtx={{
+                    theme: subSpotlightThemeRow?.theme ?? leaderboardSubSpotlight.theme,
+                    sector: subSpotlightThemeRow?.sector,
+                  }}
+                />
               </div>
             </>
           ) : (
             <>
-              <header className="border-b border-terminal-border px-4 py-3">
+              <header className="shrink-0 border-b border-terminal-border px-4 py-3">
                 <h3 className="t-section">Thematic Spotlight</h3>
-                <p className="mt-0.5 truncate text-[12px] font-semibold text-slate-200">{spotlightTheme?.theme ?? "—"}</p>
+                <p className="mt-0.5 max-w-[260px] truncate text-[12px] font-semibold text-slate-200">
+                  {spotlightTheme?.theme ?? "—"}
+                </p>
                 {spotlightTheme ? (
                   <p className="mt-0.5 truncate t-micro text-slate-500">
                     <span className="font-mono text-slate-400">{industryThemeBadgeCode(spotlightTheme.theme)}</span>
@@ -2599,7 +2739,8 @@ const ScannerView = memo(function ScannerView({
                   </p>
                 ) : null}
               </header>
-              <div className="px-4 py-3">
+              <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+                <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
             {!spotlightTheme && !leaderboardSubSpotlight ? (
               <p className="text-xs text-slate-500">No theme selected.</p>
             ) : spotlightTheme ? (
@@ -2668,12 +2809,23 @@ const ScannerView = memo(function ScannerView({
                 </div>
               </>
             ) : null}
+                </div>
+                {spotlightTheme ? (
+                  <SpotlightAllStocksSection
+                    totalCount={spotlightTheme.totalCount}
+                    stocks={spotlightTheme.stocks ?? []}
+                    open={spotlightStocksOpen}
+                    onToggle={() => setSpotlightStocksOpen((o) => !o)}
+                    onSelectTicker={onSelectTicker}
+                    themeCtx={{ theme: spotlightTheme.theme, sector: spotlightTheme.sector }}
+                  />
+                ) : null}
               </div>
             </>
           )}
         </div>
 
-        <div className="rounded-xl border border-terminal-border bg-terminal-card shadow-sm">
+        <div className="shrink-0 rounded-xl border border-terminal-border bg-terminal-card shadow-sm">
           <header className="border-b border-terminal-border px-4 py-3">
             <h3 className="t-section">Leader Constituents</h3>
             <p className="mt-0.5 t-micro">Top names (grade + liquidity)</p>
@@ -2813,22 +2965,17 @@ const ScannerView = memo(function ScannerView({
                 </button>
               </div>
               {leaderboardMode === "themes" ? (
-                <div className="flex items-center gap-1 ml-2">
-                  {(["rs", "6m", "3m", "1m"] as const).map((k) => (
-                    <button
-                      key={k}
-                      type="button"
-                      onClick={() => setLbSortKey(k)}
-                      className={`rounded border px-2 py-1 text-[11px] font-mono transition-colors ${
-                        lbSortKey === k
-                          ? "border-cyan-700/50 bg-cyan-900/50 text-cyan-300"
-                          : "border-terminal-border bg-terminal-elevated/30 text-slate-400 hover:text-slate-200"
-                      }`}
-                    >
-                      {k === "rs" ? "RS Score" : k === "6m" ? "6M %" : k === "3m" ? "3M %" : "1M %"}
-                    </button>
+                <select
+                  value={lbSortKey}
+                  onChange={(e) => setLbSortKey(e.target.value as LbSortKey)}
+                  className="ml-2 cursor-pointer rounded border border-terminal-border bg-terminal-elevated/40 px-2 py-1 text-[11px] font-mono text-slate-300 hover:border-slate-500 focus:border-cyan-700 focus:outline-none"
+                >
+                  {SORT_OPTIONS.map((o) => (
+                    <option key={o.value} value={o.value} className="bg-terminal-card text-slate-200">
+                      {o.label}
+                    </option>
                   ))}
-                </div>
+                </select>
               ) : null}
               <div className="flex items-center gap-2 rounded-md border border-terminal-border bg-terminal-bg px-2 py-2">
                 <Search className="h-4 w-4 text-slate-500" aria-hidden />
@@ -2842,26 +2989,39 @@ const ScannerView = memo(function ScannerView({
             </div>
           </header>
           <div className="fintech-scroll min-h-0 flex-1 overflow-auto">
-            <table className="w-full min-w-[1020px] border-separate border-spacing-0 text-left t-data">
+            <table className="w-full min-w-[980px] table-fixed border-separate border-spacing-0 text-left t-data">
+              <colgroup>
+                <col className="w-8" />
+                <col className="min-w-[200px] w-[280px]" />
+                <col className="w-[70px]" />
+                <col className="w-[70px]" />
+                <col className="w-[70px]" />
+                <col className="w-[80px]" />
+                <col className="w-[80px]" />
+                <col className="w-[90px]" />
+                <col className="w-[120px]" />
+              </colgroup>
               <caption className="sr-only">
                 Leaderboard of themes or industries with performance and relative strength columns.
               </caption>
               <thead>
                 <tr>
-                  {[
-                    { label: "#", key: null as null | "theme" | "perf1D" | "perf1W" | "perf1M" | "perf3M" | "perf6M" | "rs1m" | "qual" },
-                    { label: "Theme", key: "theme" as const },
-                    { label: "1D", key: "perf1D" as const },
-                    { label: "1W", key: "perf1W" as const },
-                    { label: "1M", key: "perf1M" as const },
-                    { label: "3M", key: "perf3M" as const },
-                    { label: "6M", key: "perf6M" as const },
-                    { label: "RS 1M", key: "rs1m" as const },
-                    { label: "Log %", key: null },
-                    { label: "Qual%", key: "qual" as const },
-                    { label: "Leaders", key: "leaders" as const },
-                  ].map((h) => (
-                    <th key={h.label} scope="col" className="sticky top-0 z-10 whitespace-nowrap border-b border-terminal-border bg-terminal-card px-3 py-2 t-label">
+                  {(
+                    [
+                      { label: "#", key: null as null | "theme" | "perf1D" | "perf1W" | "perf1M" | "perf3M" | "perf6M" | "rs1m", thClass: "w-8 text-right" },
+                      { label: "Theme", key: "theme" as const, thClass: "min-w-[200px] w-[280px]" },
+                      { label: "1D", key: "perf1D" as const, thClass: "w-[70px] text-right" },
+                      { label: "1W", key: "perf1W" as const, thClass: "w-[70px] text-right" },
+                      { label: "1M", key: "perf1M" as const, thClass: "w-[70px] text-right" },
+                      { label: "3M", key: "perf3M" as const, thClass: "w-[80px] text-right" },
+                      { label: "6M", key: "perf6M" as const, thClass: "w-[80px] text-right" },
+                    ] as const
+                  ).map((h) => (
+                    <th
+                      key={h.label}
+                      scope="col"
+                      className={`sticky top-0 z-10 border-b border-terminal-border bg-terminal-card px-2 py-2 t-label whitespace-nowrap ${h.thClass}`}
+                    >
                       {h.key ? (
                         <button
                           type="button"
@@ -2885,18 +3045,68 @@ const ScannerView = memo(function ScannerView({
                       )}
                     </th>
                   ))}
+                  <th
+                    scope="col"
+                    className="sticky top-0 z-10 w-[90px] border-b border-terminal-border bg-terminal-card px-2 py-2 text-right t-label whitespace-nowrap"
+                  >
+                    {leaderboardMode === "themes" ? (
+                      rsColLabel
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const key = "rs1m" as const;
+                          if (sortKey === key) {
+                            setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+                          } else {
+                            setSortKey(key);
+                            setSortDir("desc");
+                          }
+                        }}
+                        className="inline-flex items-center gap-1 hover:text-slate-300"
+                      >
+                        <span>RS 1M</span>
+                        <span className={`t-micro ${sortKey === "rs1m" ? "text-accent" : "text-slate-600"}`}>
+                          {sortKey === "rs1m" ? (sortDir === "asc" ? "▲" : "▼") : "↕"}
+                        </span>
+                      </button>
+                    )}
+                  </th>
+                  <th
+                    scope="col"
+                    className="sticky top-0 z-10 w-[120px] border-b border-terminal-border bg-terminal-card px-2 py-2 t-label whitespace-nowrap"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const key = "leaders" as const;
+                        if (sortKey === key) {
+                          setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+                        } else {
+                          setSortKey(key);
+                          setSortDir("asc");
+                        }
+                      }}
+                      className="inline-flex items-center gap-1 hover:text-slate-300"
+                    >
+                      <span>Leaders</span>
+                      <span className={`t-micro ${sortKey === "leaders" ? "text-accent" : "text-slate-600"}`}>
+                        {sortKey === "leaders" ? (sortDir === "asc" ? "▲" : "▼") : "↕"}
+                      </span>
+                    </button>
+                  </th>
                 </tr>
               </thead>
               <tbody>
                 {finvizLbLoading && !finvizFilteredRows.length ? (
                   <tr>
-                    <td colSpan={11}>
+                    <td colSpan={9}>
                       <SkeletonRows count={8} />
                     </td>
                   </tr>
                 ) : finvizLbError && !finvizFilteredRows.length ? (
                   <tr>
-                    <td colSpan={11} className="px-3 py-4">
+                    <td colSpan={9} className="px-3 py-4">
                       <ErrorBanner
                         title={`Failed to load ${leaderboardMode} data`}
                         detail={finvizLbError}
@@ -2905,7 +3115,7 @@ const ScannerView = memo(function ScannerView({
                   </tr>
                 ) : !finvizLbLoading && sortedLeaderboardRows.length === 0 ? (
                   <tr>
-                    <td colSpan={11}>
+                    <td colSpan={9}>
                       <EmptyState
                         icon={LayoutGrid}
                         title={`No ${leaderboardMode} data yet`}
@@ -2925,15 +3135,15 @@ const ScannerView = memo(function ScannerView({
                           className="cursor-pointer border-b border-terminal-border/60 bg-terminal-elevated/20 hover:bg-terminal-elevated/40"
                           onClick={() => setExpandedTheme(isOpen ? null : group.category)}
                         >
-                          <td className="px-3 py-3 text-right font-mono tabular-nums text-slate-500">{groupIdx + 1}</td>
-                          <td className="px-3 py-3">
+                          <td className="whitespace-nowrap px-2 py-3 text-right font-mono tabular-nums text-slate-500">
+                            {groupIdx + 1}
+                          </td>
+                          <td className="min-w-0 max-w-[280px] px-2 py-3">
                             <div className="flex items-center gap-2">
                               <span className={isOpen ? "rotate-90" : ""} style={{ transition: "transform 0.2s" }}>▶</span>
                               <div className="min-w-0">
                                 <p className="truncate font-bold text-slate-100">{group.category}</p>
-                                <p className="truncate t-micro text-slate-500">
-                                  {group.industries.length} industries
-                                </p>
+                                <p className="truncate t-micro text-slate-500">{group.industries.length} industries</p>
                               </div>
                             </div>
                           </td>
@@ -2941,29 +3151,22 @@ const ScannerView = memo(function ScannerView({
                           {[group.avgPerf1D, group.avgPerf1W, group.avgPerf1M, group.avgPerf3M, group.avgPerf6M].map((v, i) => (
                             <td
                               key={i}
-                              className={`px-3 py-3 text-right font-mono tabular-nums font-bold ${
+                              className={`whitespace-nowrap px-2 py-3 text-right font-mono tabular-nums font-bold ${
                                 v == null || !Number.isFinite(v) ? "text-slate-600" : pctClass(v)
                               }`}
                             >
                               {fmtPct(v, 1)}
                             </td>
                           ))}
-                          <td className="px-3 py-3 text-right font-mono tabular-nums font-bold text-slate-300">
+                          <td className="whitespace-nowrap px-2 py-3 text-right font-mono tabular-nums font-bold text-slate-300">
                             {group.avgRS == null || !Number.isFinite(group.avgRS) ? "—" : group.avgRS.toFixed(1)}
                           </td>
-                          <td className="px-3 py-3 text-right font-mono tabular-nums font-bold text-slate-600" title="Category rollup — open a sub-industry row for skyte/rs-log match">
-                            —
-                          </td>
-                          <td className="px-3 py-3 text-right font-mono tabular-nums font-bold text-slate-300">
-                            {group.avgQual == null ? "—" : `${(group.avgQual * 100).toFixed(0)}%`}
-                          </td>
-                          <td className="px-3 py-3 text-right font-mono text-slate-600">—</td>
+                          <td className="max-w-[120px] whitespace-nowrap px-2 py-3 text-right font-mono text-slate-600">—</td>
                         </tr>
                         
                         {/* Sub-Industries (when expanded) */}
                         {isOpen && group.industries.map((industry, idx) => {
                           const rs = industry.relativeStrength1M ?? null;
-                          const qRatio = Number.isFinite(industry.relativeStrengthQualifierRatio) ? industry.relativeStrengthQualifierRatio : null;
                           const adr = getIndustryAdr(industry);
                           
                           const subSelected =
@@ -2992,12 +3195,14 @@ const ScannerView = memo(function ScannerView({
                                 });
                               }}
                             >
-                              <td className="px-3 py-2 text-right font-mono tabular-nums text-slate-600">
+                              <td className="whitespace-nowrap px-2 py-2 text-right font-mono tabular-nums text-slate-600">
                                 {groupIdx + 1}.{idx + 1}
                               </td>
-                              <td className="px-3 py-2 pl-8">
-                                <div className="min-w-0 border-l border-slate-700 pl-4">
-                                  <p className={`truncate font-medium ${industry.seed ? "text-slate-500 italic" : "text-slate-200"}`}>
+                              <td className="min-w-0 max-w-[280px] px-2 py-2 pl-6">
+                                <div className="min-w-0 border-l border-slate-700 pl-3">
+                                  <p
+                                    className={`max-w-[260px] truncate font-medium ${industry.seed ? "text-slate-500 italic" : "text-slate-200"}`}
+                                  >
                                     {industry.theme}
                                     {industry.seed && (
                                       <span className="ml-1.5 rounded bg-terminal-elevated/60 px-1 py-px t-mono not-italic text-slate-600">
@@ -3016,33 +3221,19 @@ const ScannerView = memo(function ScannerView({
                               {[industry.perf1D, industry.perf1W, industry.perf1M, industry.perf3M, industry.perf6M].map((v, i) => (
                                 <td
                                   key={i}
-                                  className={`px-3 py-2 text-right font-mono tabular-nums ${
+                                  className={`whitespace-nowrap px-2 py-2 text-right font-mono tabular-nums ${
                                     v == null || !Number.isFinite(v) ? "text-slate-600" : pctClass(v)
                                   }`}
                                 >
                                   {fmtPct(v, 2)}
                                 </td>
                               ))}
-                              <td className="px-3 py-2 text-right font-mono tabular-nums text-slate-300">
+                              <td className="whitespace-nowrap px-2 py-2 text-right font-mono tabular-nums text-slate-300">
                                 {rs == null || !Number.isFinite(rs) ? "—" : rs.toFixed(1)}
                               </td>
-                              <td
-                                className="px-3 py-2 text-right font-mono tabular-nums text-slate-300"
-                                title={(() => {
-                                  if (!skyteRsEnabled || skyteRsLoading) return undefined;
-                                  const sk = lookupSkyteIndustry(skyteIndustryMap, industry.theme);
-                                  return sk ? `skyte/rs-log • RS ${sk.relative_strength.toFixed(1)}` : "No skyte row for this label (name mismatch)";
-                                })()}
-                              >
-                                {!skyteRsEnabled ? "—" : skyteRsLoading ? "…" : (() => {
-                                  const sk = lookupSkyteIndustry(skyteIndustryMap, industry.theme);
-                                  return sk ? String(sk.percentile) : "—";
-                                })()}
+                              <td className="max-w-[120px] truncate whitespace-nowrap px-2 py-2 text-right font-mono text-slate-400">
+                                {(industry.leaders ?? []).slice(0, 4).join(", ") || "—"}
                               </td>
-                              <td className="px-3 py-2 text-right font-mono tabular-nums text-slate-300">
-                                {qRatio == null ? "—" : `${(qRatio * 100).toFixed(0)}%`}
-                              </td>
-                              <td className="px-3 py-2 text-right font-mono text-slate-400">{(industry.leaders ?? []).slice(0, 4).join(", ") || "—"}</td>
                             </tr>
                           );
                         })}
@@ -3053,7 +3244,7 @@ const ScannerView = memo(function ScannerView({
                   // Themes mode — parent groups + child rows (Industry mode unchanged above)
                   themesLeaderboardGroups.map(
                     (
-                      { parent, rows, avgRs, avgPerf1D, avgPerf1W, avgPerf1M, avgPerf3M, avgPerf6M },
+                      { parent, rows, totalStockCount, avgRs, avgPerf1D, avgPerf1W, avgPerf1M, avgPerf3M, avgPerf6M },
                       idx
                     ) => {
                     const isOpen = expandedParents.has(parent);
@@ -3061,11 +3252,24 @@ const ScannerView = memo(function ScannerView({
                       const p = rsPercentileMap.get(r.theme);
                       return p != null && Number.isFinite(p);
                     });
+                    const parentLbPerfVal =
+                      lbSortKey === "1d"
+                        ? avgPerf1D
+                        : lbSortKey === "1w"
+                          ? avgPerf1W
+                          : lbSortKey === "1m"
+                            ? avgPerf1M
+                            : lbSortKey === "3m"
+                              ? avgPerf3M
+                              : lbSortKey === "6m"
+                                ? avgPerf6M
+                                : null;
                     const sortedChildren = [...rows].sort((a, b) => {
-                      if (lbSortKey === "6m") return (b.perf6M ?? -Infinity) - (a.perf6M ?? -Infinity);
-                      if (lbSortKey === "3m") return (b.perf3M ?? -Infinity) - (a.perf3M ?? -Infinity);
-                      if (lbSortKey === "1m") return (b.perf1M ?? -Infinity) - (a.perf1M ?? -Infinity);
-                      return (rsPercentileMap.get(b.theme) ?? 0) - (rsPercentileMap.get(a.theme) ?? 0);
+                      const va = getRowSortValue(a, lbSortKey, rsPercentileMap);
+                      const vb = getRowSortValue(b, lbSortKey, rsPercentileMap);
+                      const na = va != null && Number.isFinite(va) ? va : -Infinity;
+                      const nb = vb != null && Number.isFinite(vb) ? vb : -Infinity;
+                      return nb - na;
                     });
                     return (
                       <Fragment key={parent}>
@@ -3077,8 +3281,10 @@ const ScannerView = memo(function ScannerView({
                           role="button"
                           aria-expanded={isOpen}
                         >
-                          <td className="px-3 py-2.5 text-right font-mono tabular-nums text-slate-600">{idx + 1}</td>
-                          <td className="px-3 py-2.5">
+                          <td className="whitespace-nowrap px-2 py-2.5 text-right font-mono tabular-nums text-slate-600">
+                            {idx + 1}
+                          </td>
+                          <td className="min-w-0 max-w-[280px] px-2 py-2.5">
                             <div className="flex min-w-0 items-center gap-2">
                               <ChevronRight
                                 size={11}
@@ -3088,48 +3294,57 @@ const ScannerView = memo(function ScannerView({
                                 aria-hidden
                               />
                               <div className="min-w-0">
-                                <p className="truncate text-[12px] font-semibold text-slate-200">{parent}</p>
-                                <p className="t-micro text-slate-600">{rows.length} sub-industries</p>
+                                <p className="max-w-[260px] truncate text-[12px] font-semibold text-slate-200">{parent}</p>
+                                <p className="truncate t-micro text-slate-600">
+                                  {rows.length} sub-industries · {totalStockCount} stocks
+                                </p>
                               </div>
                             </div>
                           </td>
                           {[avgPerf1D, avgPerf1W, avgPerf1M, avgPerf3M, avgPerf6M].map((v, i) => (
                             <td
                               key={i}
-                              className={`px-3 py-2.5 text-right font-mono tabular-nums font-bold ${
+                              className={`whitespace-nowrap px-2 py-2.5 text-right font-mono tabular-nums font-bold ${
                                 v == null || !Number.isFinite(v) ? "text-slate-600" : pctClass(v)
                               }`}
                             >
                               {fmtPct(v, 2)}
                             </td>
                           ))}
-                          <td className="px-3 py-2.5 text-right">
-                            <div className="flex items-center justify-end gap-1.5">
-                              <div className="h-1 w-6 overflow-hidden rounded-full bg-terminal-elevated/50">
-                                <div
-                                  className="h-full rounded-full"
-                                  style={{
-                                    width: `${Math.min(100, Math.max(0, hasParentRsPct ? avgRs : 0))}%`,
-                                    background: rsBarColor(hasParentRsPct ? avgRs : null),
-                                  }}
-                                />
+                          <td className="whitespace-nowrap px-2 py-2.5 text-right">
+                            {lbSortKey === "rs" ? (
+                              <div className="flex items-center justify-end gap-1.5">
+                                <div className="h-1 w-6 overflow-hidden rounded-full bg-terminal-elevated/50">
+                                  <div
+                                    className="h-full rounded-full"
+                                    style={{
+                                      width: `${Math.min(100, Math.max(0, hasParentRsPct ? avgRs : 0))}%`,
+                                      background: rsBarColor(hasParentRsPct ? avgRs : null),
+                                    }}
+                                  />
+                                </div>
+                                <span className={`t-mono text-[11px] font-bold tabular-nums ${rsTextClass(hasParentRsPct ? avgRs : null)}`}>
+                                  {hasParentRsPct ? avgRs.toFixed(0) : "—"}
+                                </span>
                               </div>
-                              <span className={`t-mono text-[11px] font-bold tabular-nums ${rsTextClass(hasParentRsPct ? avgRs : null)}`}>
-                                {hasParentRsPct ? avgRs.toFixed(0) : "—"}
+                            ) : (
+                              <span
+                                className={`t-mono text-[11px] font-bold tabular-nums ${
+                                  parentLbPerfVal != null && Number.isFinite(parentLbPerfVal) ? pctClass(parentLbPerfVal) : "text-slate-600"
+                                }`}
+                              >
+                                {parentLbPerfVal != null && Number.isFinite(parentLbPerfVal) ? fmtPct(parentLbPerfVal, 2) : "—"}
                               </span>
-                            </div>
+                            )}
                           </td>
-                          <td className="px-3 py-2.5 text-right font-mono tabular-nums text-slate-600">—</td>
-                          <td className="px-3 py-2.5 text-right font-mono tabular-nums text-slate-600">—</td>
-                          <td className="px-3 py-2.5 text-right font-mono text-slate-600">—</td>
+                          <td className="max-w-[120px] truncate whitespace-nowrap px-2 py-2.5 text-right font-mono text-slate-600">
+                            —
+                          </td>
                         </tr>
 
                         {isOpen &&
                           sortedChildren.map((row, cidx) => {
-                            const rsPct = rsPercentileMap.get(row.theme) ?? null;
-                            const qRatio = Number.isFinite(row.relativeStrengthQualifierRatio)
-                              ? row.relativeStrengthQualifierRatio
-                              : null;
+                            const sortVal = getRowSortValue(row, lbSortKey, rsPercentileMap);
                             const themeRowSelected =
                               (leaderboardSubSpotlight?.kind === "finviz_theme" &&
                                 leaderboardSubSpotlight.theme === row.theme) ||
@@ -3147,10 +3362,14 @@ const ScannerView = memo(function ScannerView({
                                 }}
                                 title="Click to spotlight"
                               >
-                                <td className="px-3 py-2 text-right font-mono tabular-nums text-slate-600">{cidx + 1}</td>
-                                <td className="px-3 py-2 pl-8">
-                                  <div className="min-w-0 border-l border-slate-700 pl-4">
-                                    <p className={`truncate font-medium ${row.seed ? "italic text-slate-500" : "text-slate-100"}`}>
+                                <td className="whitespace-nowrap px-2 py-2 text-right font-mono tabular-nums text-slate-600">
+                                  {cidx + 1}
+                                </td>
+                                <td className="min-w-0 max-w-[280px] px-2 py-2 pl-6">
+                                  <div className="min-w-0 border-l border-slate-700 pl-3">
+                                    <p
+                                      className={`max-w-[260px] truncate font-medium ${row.seed ? "italic text-slate-500" : "text-slate-100"}`}
+                                    >
                                       {row.theme}
                                       {row.seed && (
                                         <span className="ml-1.5 rounded bg-terminal-elevated/60 px-1 py-px t-mono not-italic text-slate-600">
@@ -3166,39 +3385,40 @@ const ScannerView = memo(function ScannerView({
                                 {[row.perf1D, row.perf1W, row.perf1M, row.perf3M, row.perf6M].map((v, i) => (
                                   <td
                                     key={i}
-                                    className={`px-3 py-2 text-right font-mono tabular-nums ${
+                                    className={`whitespace-nowrap px-2 py-2 text-right font-mono tabular-nums ${
                                       v == null || !Number.isFinite(v) ? "text-slate-600" : pctClass(v)
                                     }`}
                                   >
                                     {fmtPct(v, 2)}
                                   </td>
                                 ))}
-                                <td className="px-3 py-2 text-right">
-                                  <div className="flex items-center justify-end gap-1.5">
-                                    <div className="h-1 w-5 overflow-hidden rounded-full bg-terminal-elevated/50">
-                                      <div
-                                        className="h-full rounded-full"
-                                        style={{
-                                          width: `${Math.min(100, Math.max(0, rsPct ?? 0))}%`,
-                                          background: rsBarColor(rsPct),
-                                        }}
-                                      />
+                                <td className="whitespace-nowrap px-2 py-2 text-right">
+                                  {lbSortKey === "rs" ? (
+                                    <div className="flex items-center justify-end gap-1.5">
+                                      <div className="h-1 w-5 overflow-hidden rounded-full bg-terminal-elevated/50">
+                                        <div
+                                          className="h-full rounded-full"
+                                          style={{
+                                            width: `${Math.min(100, Math.max(0, sortVal ?? 0))}%`,
+                                            background: rsBarColor(sortVal),
+                                          }}
+                                        />
+                                      </div>
+                                      <span className={`t-mono text-[11px] font-bold tabular-nums ${rsTextClass(sortVal)}`}>
+                                        {sortVal != null && Number.isFinite(sortVal) ? sortVal.toFixed(0) : "—"}
+                                      </span>
                                     </div>
-                                    <span className={`t-mono text-[11px] font-bold tabular-nums ${rsTextClass(rsPct)}`}>
-                                      {rsPct != null && Number.isFinite(rsPct) ? rsPct.toFixed(0) : "—"}
+                                  ) : (
+                                    <span
+                                      className={`t-mono text-[11px] font-bold tabular-nums ${
+                                        sortVal != null && Number.isFinite(sortVal) ? pctClass(sortVal) : "text-slate-600"
+                                      }`}
+                                    >
+                                      {sortVal != null && Number.isFinite(sortVal) ? fmtPct(sortVal, 2) : "—"}
                                     </span>
-                                  </div>
+                                  )}
                                 </td>
-                                <td
-                                  className="px-3 py-2 text-right font-mono tabular-nums text-slate-600"
-                                  title="Switch to Industry leaderboard for skyte/rs-log percentile column"
-                                >
-                                  —
-                                </td>
-                                <td className="px-3 py-2 text-right font-mono tabular-nums text-slate-200">
-                                  {qRatio == null ? "—" : `${(qRatio * 100).toFixed(0)}%`}
-                                </td>
-                                <td className="px-3 py-2 text-right font-mono text-slate-300">
+                                <td className="max-w-[120px] truncate whitespace-nowrap px-2 py-2 text-right font-mono text-slate-300">
                                   {(row.leaders ?? []).slice(0, 4).join(", ") || "—"}
                                 </td>
                               </tr>
