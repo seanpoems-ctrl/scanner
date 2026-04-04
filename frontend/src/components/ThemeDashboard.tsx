@@ -1,5 +1,5 @@
 import React, { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type JSX } from "react";
-import { AlertTriangle, BarChart2, BarChart3, ChevronRight, Info, LayoutGrid, ListPlus, Moon, Plus, Search, Star, Sunrise, X } from "lucide-react";
+import { AlertTriangle, BarChart2, BarChart3, ChevronRight, Info, LayoutGrid, ListPlus, Moon, Plus, Search, Star, Sunrise } from "lucide-react";
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import MarketBreadth from "./MarketBreadth";
 import { useWatchlist } from "../hooks/useWatchlist";
@@ -727,160 +727,6 @@ const RsSnapshot = memo(function RsSnapshot({ rows }: { rows: { theme: string; r
         )}
       </div>
     </div>
-  );
-});
-
-const SpotlightDrawer = memo(function SpotlightDrawer({
-  theme,
-  skyteRs,
-  onClose,
-}: {
-  theme: ApiTheme | null;
-  skyteRs: number | null;
-  onClose: () => void;
-}) {
-  const isOpen = theme !== null;
-
-  const stockRows = useMemo(() => {
-    if (!theme?.stocks) return [];
-    return [...theme.stocks].sort((a, b) => {
-      const ga = a.gradeLabel === "A+" ? 2 : a.gradeLabel === "A" ? 1 : 0;
-      const gb = b.gradeLabel === "A+" ? 2 : b.gradeLabel === "A" ? 1 : 0;
-      if (gb !== ga) return gb - ga;
-      return (b.avg_dollar_volume ?? 0) - (a.avg_dollar_volume ?? 0);
-    });
-  }, [theme]);
-
-  const rs = theme?.relativeStrength1M ?? null;
-
-  /** Below app header + workspace tabs (WatchlistDrawer is in-flow; this matches that chrome height). */
-  const drawerTop = "var(--theme-spotlight-drawer-top, 7.75rem)";
-
-  return (
-    <>
-      <div
-        className={`fixed right-0 bottom-0 left-0 z-30 transition-opacity duration-200 ${
-          isOpen ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0"
-        }`}
-        style={{ top: drawerTop, background: "rgba(0,0,0,0.45)" }}
-        onClick={onClose}
-        aria-hidden
-      />
-      <div
-        data-e2e="spotlight-drawer"
-        role="dialog"
-        aria-modal="true"
-        aria-label="Theme spotlight drawer"
-        aria-hidden={!isOpen}
-        style={{ top: drawerTop }}
-        className={`fixed right-0 bottom-0 z-40 flex w-80 flex-col border-l border-terminal-border bg-terminal-card shadow-2xl transition-transform duration-200 ${
-          isOpen ? "translate-x-0" : "translate-x-full"
-        }`}
-      >
-        <div className="flex items-start justify-between gap-2 border-b border-terminal-border bg-terminal-bg/80 px-4 py-3">
-          <div className="min-w-0">
-            <p className="t-micro mb-0.5 uppercase tracking-widest text-slate-500">Thematic Spotlight</p>
-            <p className="truncate text-sm font-semibold leading-snug text-slate-100">{theme?.theme ?? "—"}</p>
-            <div className="mt-1 flex flex-wrap items-center gap-2">
-              <span className="t-micro text-slate-500">{theme?.totalCount ?? 0} stocks</span>
-              {rs != null && (
-                <span className={`t-mono text-xs font-bold ${rsTextClass(rs)}`}>RS {rs.toFixed(1)}</span>
-              )}
-              {skyteRs != null && (
-                <span className="t-micro text-slate-600">skyte {skyteRs.toFixed(1)}</span>
-              )}
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="mt-0.5 shrink-0 rounded p-1 text-slate-500 transition-colors hover:bg-terminal-elevated/60 hover:text-slate-200"
-            aria-label="Close"
-          >
-            <X size={15} />
-          </button>
-        </div>
-
-        {rs != null && (
-          <div className="px-4 pb-1 pt-2">
-            <div className="h-1 w-full overflow-hidden rounded-full bg-terminal-elevated/40">
-              <div
-                className="h-full rounded-full transition-all duration-500"
-                style={{ width: `${Math.min(100, Math.max(0, rs))}%`, background: rsBarColor(rs) }}
-              />
-            </div>
-          </div>
-        )}
-
-        {theme && (
-          <div className="grid grid-cols-4 gap-px border-b border-terminal-border bg-terminal-border">
-            {(
-              [
-                { label: "1D", val: theme.perf1D },
-                { label: "1M", val: theme.perf1M },
-                { label: "3M", val: theme.perf3M },
-                { label: "6M", val: theme.perf6M },
-              ] as const
-            ).map(({ label, val }) => (
-              <div key={label} className="bg-terminal-bg px-2 py-2 text-center">
-                <p className="t-micro text-slate-500">{label}</p>
-                <p className={`mt-0.5 t-mono text-[11px] font-bold ${pctClass(val ?? 0)}`}>{fmtPct(val, 2)}</p>
-              </div>
-            ))}
-          </div>
-        )}
-
-        <div className="min-h-0 flex-1 overflow-y-auto">
-          {stockRows.length === 0 ? (
-            <p className="px-4 py-6 text-center t-micro text-slate-600">No stock data</p>
-          ) : (
-            <div className="divide-y divide-terminal-border/50">
-              <p className="px-4 pb-1 pt-2 t-micro uppercase tracking-widest text-slate-500">Top stocks by grade + liquidity</p>
-              {stockRows.slice(0, 25).map((s) => (
-                <div
-                  key={s.ticker}
-                  className="flex items-center justify-between gap-2 px-4 py-2 transition-colors hover:bg-terminal-elevated/30"
-                >
-                  <div className="min-w-0">
-                    <p className="t-mono text-xs font-bold text-slate-100">{s.ticker}</p>
-                    <p className="t-micro max-w-[140px] truncate text-slate-500">{s.name}</p>
-                  </div>
-                  <div className="flex shrink-0 items-center gap-2">
-                    {s.today_return_pct != null && (
-                      <span className={`t-mono text-[11px] ${pctClass(s.today_return_pct)}`}>{fmtPct(s.today_return_pct, 2)}</span>
-                    )}
-                    {s.gradeLabel && s.gradeLabel !== "-" && (
-                      <span
-                        className={`inline-flex h-5 w-5 items-center justify-center rounded-full border t-micro text-[10px] font-bold ${
-                          s.gradeLabel === "A+"
-                            ? "border-emerald-500/60 bg-emerald-500/20 text-emerald-300"
-                            : "border-sky-500/55 bg-sky-500/15 text-sky-200"
-                        }`}
-                      >
-                        {s.gradeLabel}
-                      </span>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        <div className="flex flex-col gap-2 border-t border-terminal-border px-4 py-3">
-          {theme?.finvizThemeSlug ? (
-            <a
-              href={`https://finviz.com/screener.ashx?v=111&f=themes_${theme.finvizThemeSlug}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex items-center justify-center gap-1.5 rounded-lg border border-terminal-border bg-terminal-elevated/40 px-3 py-2 t-micro text-slate-300 transition-colors hover:border-slate-500 hover:text-slate-100"
-            >
-              Open in Finviz ↗
-            </a>
-          ) : null}
-        </div>
-      </div>
-    </>
   );
 });
 
@@ -2191,15 +2037,13 @@ const ScannerView = memo(function ScannerView({
 }) {
   const [leaderboardMode, setLeaderboardMode] = useState<"themes" | "industry">("themes");
   const skyteRsEnabled = leaderboardMode === "industry";
-  const { lookupMap: skyteIndustryMap, loading: skyteRsLoading } = useSkyteRsIndustries(true);
+  const { lookupMap: skyteIndustryMap, loading: skyteRsLoading } = useSkyteRsIndustries(skyteRsEnabled);
   // drilldownLabel: when set (industry mode only), filter rows to this thematic bucket.
   const [drilldownLabel, setDrilldownLabel] = useState<string | null>(null);
   // expandedTheme: for accordion-style industry grouping
   const [expandedTheme, setExpandedTheme] = useState<string | null>(null);
   const [leaderboardSubSpotlight, setLeaderboardSubSpotlight] = useState<LeaderboardSubSpotlight | null>(null);
   const [expandedParents, setExpandedParents] = useState<Set<string>>(new Set());
-  const [lbThemeDrawer, setLbThemeDrawer] = useState<ApiTheme | null>(null);
-  const [lbThemeDrawerSkyteRs, setLbThemeDrawerSkyteRs] = useState<number | null>(null);
   const now_et_h = new Date().toLocaleString("en-US", { timeZone: "America/New_York", hour: "numeric", hour12: false });
   const [briefMode, setBriefMode] = useState<"pre" | "post">(Number(now_et_h) < 17 ? "pre" : "post");
   const [sortKey, setSortKey] = useState<
@@ -2245,29 +2089,25 @@ const ScannerView = memo(function ScannerView({
 
   const activateThemeLeaderboardRow = useCallback(
     (row: ApiTheme) => {
-      const fullRow = themes.find((t) => t.theme === row.theme) ?? row;
-      const sk = lookupSkyteIndustry(skyteIndustryMap, fullRow.theme);
-      setLbThemeDrawer(fullRow);
-      setLbThemeDrawerSkyteRs(sk?.relative_strength ?? null);
-      setSpotlightThemeName(fullRow.theme);
-      const finvizSlug = (fullRow.finvizThemeSlug ?? "").trim();
+      setSpotlightThemeName(row.theme);
+      const finvizSlug = (row.finvizThemeSlug ?? "").trim();
       if (finvizSlug) {
         setLeaderboardSubSpotlight({
           kind: "finviz_theme",
-          theme: fullRow.theme,
+          theme: row.theme,
           finvizThemeSlug: finvizSlug,
-          relativeStrength1M: fullRow.relativeStrength1M,
-          perf1D: fullRow.perf1D ?? null,
-          perf1M: fullRow.perf1M ?? null,
-          perfYTD: fullRow.perfYTD ?? null,
-          totalCount: fullRow.totalCount ?? 0,
-          leaders: fullRow.leaders ?? [],
+          relativeStrength1M: row.relativeStrength1M,
+          perf1D: row.perf1D ?? null,
+          perf1M: row.perf1M ?? null,
+          perfYTD: row.perfYTD ?? null,
+          totalCount: row.totalCount ?? 0,
+          leaders: row.leaders ?? [],
         });
       } else {
         setLeaderboardSubSpotlight(null);
       }
     },
-    [skyteIndustryMap, setSpotlightThemeName, themes]
+    [setSpotlightThemeName]
   );
 
   const { payload: finvizLeaderboardPayload, loading: finvizLbLoading, error: finvizLbError } = useFdvLeaderboard(leaderboardMode);
@@ -3270,11 +3110,6 @@ const ScannerView = memo(function ScannerView({
           </div>
         </section>
       </div>
-      <SpotlightDrawer
-        theme={lbThemeDrawer}
-        skyteRs={lbThemeDrawerSkyteRs}
-        onClose={() => setLbThemeDrawer(null)}
-      />
     </div>
   );
 });

@@ -5,7 +5,6 @@ import { expect, test, type Page } from "@playwright/test";
  *   $env:E2E_BASE_URL="https://scanner-gules-rho.vercel.app"; npm run test:e2e
  *
  * Requires scanner payload from your API (Loading scanner… must clear).
- * SpotlightDrawer checks are skipped if the deployed bundle predates the drawer (merge latest + redeploy).
  */
 
 function themesModeButton(page: Page) {
@@ -43,35 +42,19 @@ test.describe("Thematic Scanner — leaderboard", () => {
     await expect(childRow).toContainText(/ · /);
   });
 
-  test("Themes: SpotlightDrawer from child row", async ({ page }) => {
+  test("Themes: child row activates middle Thematic Spotlight", async ({ page }) => {
     await goToThemesLeaderboardExpandedAI(page);
 
     const childRow = page.locator('tbody tr[tabindex="0"]').first();
     await expect(childRow).toBeVisible();
     await childRow.click();
 
-    const drawer = page
-      .getByRole("dialog", { name: "Theme spotlight drawer" })
-      .or(page.locator('[data-e2e="spotlight-drawer"]'));
-    const drawerOpened = await drawer
-      .waitFor({ state: "visible", timeout: 20_000 })
-      .then(() => true)
-      .catch(() => false);
-
-    if (!drawerOpened && process.env.E2E_REQUIRE_SPOTLIGHT_DRAWER === "1") {
-      throw new Error("E2E_REQUIRE_SPOTLIGHT_DRAWER=1 but SpotlightDrawer did not open.");
-    }
-    test.skip(
-      !drawerOpened,
-      "SpotlightDrawer missing on this host — deploy current frontend, then re-run (use E2E_REQUIRE_SPOTLIGHT_DRAWER=1 to fail hard)."
-    );
-
-    await expect(drawer.getByText("Thematic Spotlight", { exact: false })).toBeVisible();
-    await expect(drawer.getByText("Top stocks by grade + liquidity").or(drawer.getByText("No stock data"))).toBeVisible();
-    await expect(drawer.getByText(/^1D$/)).toBeVisible();
-    await expect(drawer.getByText(/^1M$/)).toBeVisible();
-    await expect(drawer.getByText(/^3M$/)).toBeVisible();
-    await expect(drawer.getByText(/^6M$/)).toBeVisible();
+    await expect(
+      page
+        .getByRole("heading", { name: "Thematic Spotlight" })
+        .or(page.getByText("Thematic spotlight", { exact: true }))
+        .or(page.getByText("Avg price", { exact: true }))
+    ).toBeVisible({ timeout: 20_000 });
   });
 
   test("Industry: accordion still works", async ({ page }) => {
