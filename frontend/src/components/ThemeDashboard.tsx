@@ -211,12 +211,12 @@ function avgFiniteField(rows: ApiTheme[], pick: (r: ApiTheme) => number | null |
 }
 
 const SORT_OPTIONS = [
-  { value: "rs", label: "Sort: RS Score" },
-  { value: "1d", label: "Sort: 1D %" },
-  { value: "1w", label: "Sort: 1W %" },
-  { value: "1m", label: "Sort: 1M %" },
-  { value: "3m", label: "Sort: 3M %" },
-  { value: "6m", label: "Sort: 6M %" },
+  { value: "rs", label: "RS" },
+  { value: "1d", label: "1D" },
+  { value: "1w", label: "1W" },
+  { value: "1m", label: "1M" },
+  { value: "3m", label: "3M" },
+  { value: "6m", label: "6M" },
 ] as const;
 
 type LbSortKey = (typeof SORT_OPTIONS)[number]["value"];
@@ -234,14 +234,24 @@ type ThemeParentGroup = {
   sortScore: number;
 };
 
-function getRowSortValue(row: ApiTheme, key: LbSortKey, rsMap: Map<string, number>): number | null {
-  if (key === "rs") return rsMap.get(row.theme) ?? null;
-  if (key === "1d") return row.perf1D ?? null;
-  if (key === "1w") return row.perf1W ?? null;
-  if (key === "1m") return row.perf1M ?? null;
-  if (key === "3m") return row.perf3M ?? null;
-  if (key === "6m") return row.perf6M ?? null;
-  return null;
+/** Prefer Finviz leaderboard row (correct ticker universe) over main scanner theme when names align. */
+function resolveThemeRowForSpotlight(
+  themeName: string | null | undefined,
+  scannerThemes: ApiTheme[],
+  finvizThemes: ApiTheme[]
+): ApiTheme | null {
+  if (!themeName) return null;
+  const fromFdv = finvizThemes.find((t) => t.theme === themeName);
+  const fromScanner = scannerThemes.find((t) => t.theme === themeName);
+  if (fromFdv?.stocks?.length) return fromFdv;
+  if (fromScanner?.stocks?.length) return fromScanner;
+  return fromFdv ?? fromScanner ?? null;
+}
+
+function spotlightStockCount(theme: ApiTheme | null | undefined): number {
+  if (!theme) return 0;
+  const n = theme.stocks?.length ?? 0;
+  return n > 0 ? n : (theme.totalCount ?? 0);
 }
 
 function getParentLbSortValue(g: ThemeParentGroup, key: LbSortKey): number {
@@ -2433,18 +2443,6 @@ const ScannerView = memo(function ScannerView({
     return [...groups].sort((a, b) => getParentLbSortValue(b, lbSortKey) - getParentLbSortValue(a, lbSortKey));
   }, [leaderboardMode, sortedLeaderboardRows, rsPercentileMap, lbSortKey]);
 
-  const rsColLabel =
-    (
-      {
-        rs: "RS Score",
-        "1d": "1D %",
-        "1w": "1W %",
-        "1m": "1M %",
-        "3m": "3M %",
-        "6m": "6M %",
-      } as const satisfies Record<LbSortKey, string>
-    )[lbSortKey] ?? "RS Score";
-
   const rsRows = useMemo(() => {
     return sortedThemes
       .map((t) => ({ theme: t.theme, rs: t.relativeStrength1M ?? t.relativeStrengthQualifierRatio }))
@@ -2459,8 +2457,9 @@ const ScannerView = memo(function ScannerView({
 
   const spotlightTheme = useMemo(() => {
     if (!spotlightThemeName) return filteredThemes[0] ?? sortedThemes[0] ?? null;
-    return themes.find((t) => t.theme === spotlightThemeName) ?? filteredThemes[0] ?? sortedThemes[0] ?? null;
-  }, [themes, spotlightThemeName, filteredThemes, sortedThemes]);
+    const resolved = resolveThemeRowForSpotlight(spotlightThemeName, themes, finvizRows);
+    return resolved ?? filteredThemes[0] ?? sortedThemes[0] ?? null;
+  }, [themes, finvizRows, spotlightThemeName, filteredThemes, sortedThemes]);
 
   const showLeaderboardSubSpot = leaderboardSubSpotlight !== null;
   const { data: uniSpotlight } = useUniverseSpotlight(
@@ -2512,17 +2511,17 @@ const ScannerView = memo(function ScannerView({
 
   const subSpotlightThemeRow = useMemo(() => {
     if (!leaderboardSubSpotlight) return null;
-    return themes.find((t) => t.theme === leaderboardSubSpotlight.theme) ?? null;
-  }, [themes, leaderboardSubSpotlight]);
+    return resolveThemeRowForSpotlight(leaderboardSubSpotlight.theme, themes, finvizRows);
+  }, [themes, finvizRows, leaderboardSubSpotlight]);
 
   const spotlightRsPercentile = spotlightTheme?.theme
     ? (rsPercentileMap.get(spotlightTheme.theme) ?? null)
     : null;
 
   return (
-    <div className="flex h-full min-h-0 w-full min-w-0 flex-1 flex-row gap-3 overflow-hidden">
+    <div className="flex max-h-[calc(100vh-7.75rem)] min-h-0 w-full min-w-0 flex-1 flex-row gap-3 overflow-hidden">
       {/* Left: Market + Brief + VIX */}
-      <div className="fintech-scroll flex w-[360px] min-w-[360px] shrink-0 flex-col gap-3 overflow-y-auto pr-1">
+      <div className="fintech-scroll flex max-h-full w-[360px] min-w-[360px] shrink-0 flex-col gap-3 overflow-y-auto pr-1">
         <MarketRegimeCard state={payload.market_momentum_score?.state} message={payload.market_momentum_score?.message} />
         <IntelBriefCard
           mode={briefMode}
@@ -2537,7 +2536,7 @@ const ScannerView = memo(function ScannerView({
       </div>
 
       {/* Middle: RS + Spotlight + Constituents */}
-      <div className="flex h-full min-h-0 w-[420px] min-w-[420px] shrink-0 flex-col gap-3 overflow-hidden pr-1">
+      <div className="flex max-h-full min-h-0 w-[420px] min-w-[420px] shrink-0 flex-col gap-3 overflow-y-auto pr-1">
         <div className="shrink-0">
           <RsSnapshot rows={rsRows} />
         </div>
@@ -2573,7 +2572,10 @@ const ScannerView = memo(function ScannerView({
                   <span className="shrink-0 rounded-full border border-white/20 bg-terminal-bg/30 px-2.5 py-1 text-center t-micro font-semibold leading-tight text-white/90 backdrop-blur-sm">
                     <span className="font-mono">{leaderboardSubSpotlightBadge(leaderboardSubSpotlight)}</span>
                     <span className="mx-1 text-white/40">·</span>
-                    <span>{industrySpotlightMoverStats?.n ?? leaderboardSubSpotlight.totalCount}</span>
+                    <span>
+                      {(spotlightStockCount(subSpotlightThemeRow) || industrySpotlightMoverStats?.n) ??
+                        leaderboardSubSpotlight.totalCount}
+                    </span>
                     <span className="text-white/60"> stocks</span>
                     {subSpotlightThemeRow != null ? (
                       <>
@@ -2712,7 +2714,7 @@ const ScannerView = memo(function ScannerView({
                   </div>
                 </div>
                 <SpotlightAllStocksSection
-                  totalCount={subSpotlightThemeRow?.totalCount ?? leaderboardSubSpotlight.totalCount}
+                  totalCount={spotlightStockCount(subSpotlightThemeRow) || leaderboardSubSpotlight.totalCount}
                   stocks={subSpotlightThemeRow?.stocks ?? []}
                   open={spotlightStocksOpen}
                   onToggle={() => setSpotlightStocksOpen((o) => !o)}
@@ -2735,7 +2737,7 @@ const ScannerView = memo(function ScannerView({
                   <p className="mt-0.5 truncate t-micro text-slate-500">
                     <span className="font-mono text-slate-400">{industryThemeBadgeCode(spotlightTheme.theme)}</span>
                     {" · "}
-                    {spotlightTheme.totalCount} stocks · {spotlightTheme.qualifiedCount} qualified
+                    {spotlightStockCount(spotlightTheme)} stocks · {spotlightTheme.qualifiedCount} qualified
                   </p>
                 ) : null}
               </header>
@@ -2812,7 +2814,7 @@ const ScannerView = memo(function ScannerView({
                 </div>
                 {spotlightTheme ? (
                   <SpotlightAllStocksSection
-                    totalCount={spotlightTheme.totalCount}
+                    totalCount={spotlightStockCount(spotlightTheme)}
                     stocks={spotlightTheme.stocks ?? []}
                     open={spotlightStocksOpen}
                     onToggle={() => setSpotlightStocksOpen((o) => !o)}
@@ -2902,8 +2904,8 @@ const ScannerView = memo(function ScannerView({
       </div>
 
       {/* Right: Leaderboard — sticky thead via border-separate + sticky top-0 on th */}
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-        <section className="flex min-h-0 flex-1 flex-col rounded-xl border border-terminal-border bg-terminal-card shadow-sm">
+      <div className="flex max-h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+        <section className="flex max-h-full min-h-0 flex-1 flex-col rounded-xl border border-terminal-border bg-terminal-card shadow-sm">
           <header className="flex flex-wrap items-center justify-between gap-3 border-b border-terminal-border px-4 py-3">
             <div className="min-w-0">
               <h2 className="truncate text-sm font-semibold text-white">Leaderboard</h2>
@@ -2968,10 +2970,11 @@ const ScannerView = memo(function ScannerView({
                 <select
                   value={lbSortKey}
                   onChange={(e) => setLbSortKey(e.target.value as LbSortKey)}
-                  className="ml-2 cursor-pointer rounded border border-terminal-border bg-terminal-elevated/40 px-2 py-1 text-[11px] font-mono text-slate-300 hover:border-slate-500 focus:border-cyan-700 focus:outline-none"
+                  style={{ colorScheme: "dark", background: "#0b1220", color: "#cbd5e1" }}
+                  className="ml-2 cursor-pointer rounded border border-terminal-border bg-terminal-bg px-2 py-1 text-[11px] font-mono text-slate-300 accent-cyan-500 hover:border-slate-500 focus:border-cyan-600 focus:outline-none focus:ring-1 focus:ring-cyan-600"
                 >
                   {SORT_OPTIONS.map((o) => (
-                    <option key={o.value} value={o.value} className="bg-terminal-card text-slate-200">
+                    <option key={o.value} value={o.value} style={{ background: "#0b1220", color: "#cbd5e1" }}>
                       {o.label}
                     </option>
                   ))}
@@ -2988,7 +2991,7 @@ const ScannerView = memo(function ScannerView({
               </div>
             </div>
           </header>
-          <div className="fintech-scroll min-h-0 flex-1 overflow-auto">
+          <div className="fintech-scroll max-h-full min-h-0 flex-1 overflow-y-auto">
             <table className="w-full min-w-[980px] table-fixed border-separate border-spacing-0 text-left t-data">
               <colgroup>
                 <col className="w-8" />
@@ -3006,95 +3009,180 @@ const ScannerView = memo(function ScannerView({
               </caption>
               <thead>
                 <tr>
-                  {(
-                    [
-                      { label: "#", key: null as null | "theme" | "perf1D" | "perf1W" | "perf1M" | "perf3M" | "perf6M" | "rs1m", thClass: "w-8 text-right" },
-                      { label: "Theme", key: "theme" as const, thClass: "min-w-[200px] w-[280px]" },
-                      { label: "1D", key: "perf1D" as const, thClass: "w-[70px] text-right" },
-                      { label: "1W", key: "perf1W" as const, thClass: "w-[70px] text-right" },
-                      { label: "1M", key: "perf1M" as const, thClass: "w-[70px] text-right" },
-                      { label: "3M", key: "perf3M" as const, thClass: "w-[80px] text-right" },
-                      { label: "6M", key: "perf6M" as const, thClass: "w-[80px] text-right" },
-                    ] as const
-                  ).map((h) => (
-                    <th
-                      key={h.label}
-                      scope="col"
-                      className={`sticky top-0 z-10 border-b border-terminal-border bg-terminal-card px-2 py-2 t-label whitespace-nowrap ${h.thClass}`}
-                    >
-                      {h.key ? (
+                  {leaderboardMode === "themes" ? (
+                    <>
+                      <th
+                        scope="col"
+                        className="sticky top-0 z-10 w-8 border-b border-terminal-border bg-terminal-card px-2 py-2 text-right t-label whitespace-nowrap"
+                      >
+                        #
+                      </th>
+                      <th
+                        scope="col"
+                        className="sticky top-0 z-10 min-w-[200px] w-[280px] border-b border-terminal-border bg-terminal-card px-2 py-2 t-label whitespace-nowrap"
+                      >
                         <button
                           type="button"
                           onClick={() => {
-                            if (sortKey === h.key) {
+                            const key = "theme" as const;
+                            if (sortKey === key) {
                               setSortDir((d) => (d === "asc" ? "desc" : "asc"));
                             } else {
-                              setSortKey(h.key);
-                              setSortDir(h.key === "theme" ? "asc" : "desc");
+                              setSortKey(key);
+                              setSortDir("asc");
                             }
                           }}
                           className="inline-flex items-center gap-1 hover:text-slate-300"
                         >
-                          <span>{h.label}</span>
-                          <span className={`t-micro ${sortKey === h.key ? "text-accent" : "text-slate-600"}`}>
-                            {sortKey === h.key ? (sortDir === "asc" ? "▲" : "▼") : "↕"}
+                          <span>Theme</span>
+                          <span className={`t-micro ${sortKey === "theme" ? "text-accent" : "text-slate-600"}`}>
+                            {sortKey === "theme" ? (sortDir === "asc" ? "▲" : "▼") : "↕"}
                           </span>
                         </button>
-                      ) : (
-                        h.label
-                      )}
-                    </th>
-                  ))}
-                  <th
-                    scope="col"
-                    className="sticky top-0 z-10 w-[90px] border-b border-terminal-border bg-terminal-card px-2 py-2 text-right t-label whitespace-nowrap"
-                  >
-                    {leaderboardMode === "themes" ? (
-                      rsColLabel
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const key = "rs1m" as const;
-                          if (sortKey === key) {
-                            setSortDir((d) => (d === "asc" ? "desc" : "asc"));
-                          } else {
-                            setSortKey(key);
-                            setSortDir("desc");
-                          }
-                        }}
-                        className="inline-flex items-center gap-1 hover:text-slate-300"
+                      </th>
+                      {(
+                        [
+                          ["1d", "1D"],
+                          ["1w", "1W"],
+                          ["1m", "1M"],
+                          ["3m", "3M"],
+                          ["6m", "6M"],
+                        ] as const
+                      ).map(([k, label]) => (
+                        <th
+                          key={k}
+                          scope="col"
+                          className={`sticky top-0 z-10 cursor-pointer select-none border-b border-terminal-border bg-terminal-card px-2 py-2 text-right t-label whitespace-nowrap ${
+                            lbSortKey === k ? "font-bold text-cyan-400" : "text-slate-500 hover:text-slate-300"
+                          }`}
+                          onClick={() => setLbSortKey(k)}
+                        >
+                          {label}
+                          {lbSortKey === k ? " ▼" : ""}
+                        </th>
+                      ))}
+                      <th
+                        scope="col"
+                        className={`sticky top-0 z-10 w-[90px] cursor-pointer select-none border-b border-terminal-border bg-terminal-card px-2 py-2 text-right t-label whitespace-nowrap ${
+                          lbSortKey === "rs" ? "font-bold text-cyan-400" : "text-slate-500 hover:text-slate-300"
+                        }`}
+                        onClick={() => setLbSortKey("rs")}
                       >
-                        <span>RS 1M</span>
-                        <span className={`t-micro ${sortKey === "rs1m" ? "text-accent" : "text-slate-600"}`}>
-                          {sortKey === "rs1m" ? (sortDir === "asc" ? "▲" : "▼") : "↕"}
-                        </span>
-                      </button>
-                    )}
-                  </th>
-                  <th
-                    scope="col"
-                    className="sticky top-0 z-10 w-[120px] border-b border-terminal-border bg-terminal-card px-2 py-2 t-label whitespace-nowrap"
-                  >
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const key = "leaders" as const;
-                        if (sortKey === key) {
-                          setSortDir((d) => (d === "asc" ? "desc" : "asc"));
-                        } else {
-                          setSortKey(key);
-                          setSortDir("asc");
-                        }
-                      }}
-                      className="inline-flex items-center gap-1 hover:text-slate-300"
-                    >
-                      <span>Leaders</span>
-                      <span className={`t-micro ${sortKey === "leaders" ? "text-accent" : "text-slate-600"}`}>
-                        {sortKey === "leaders" ? (sortDir === "asc" ? "▲" : "▼") : "↕"}
-                      </span>
-                    </button>
-                  </th>
+                        RS{lbSortKey === "rs" ? " ▼" : ""}
+                      </th>
+                      <th
+                        scope="col"
+                        className="sticky top-0 z-10 w-[120px] border-b border-terminal-border bg-terminal-card px-2 py-2 t-label whitespace-nowrap"
+                      >
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const key = "leaders" as const;
+                            if (sortKey === key) {
+                              setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+                            } else {
+                              setSortKey(key);
+                              setSortDir("asc");
+                            }
+                          }}
+                          className="inline-flex items-center gap-1 hover:text-slate-300"
+                        >
+                          <span>Leaders</span>
+                          <span className={`t-micro ${sortKey === "leaders" ? "text-accent" : "text-slate-600"}`}>
+                            {sortKey === "leaders" ? (sortDir === "asc" ? "▲" : "▼") : "↕"}
+                          </span>
+                        </button>
+                      </th>
+                    </>
+                  ) : (
+                    <>
+                      {(
+                        [
+                          { label: "#", key: null as null | "theme" | "perf1D" | "perf1W" | "perf1M" | "perf3M" | "perf6M" | "rs1m", thClass: "w-8 text-right" },
+                          { label: "Theme", key: "theme" as const, thClass: "min-w-[200px] w-[280px]" },
+                          { label: "1D", key: "perf1D" as const, thClass: "w-[70px] text-right" },
+                          { label: "1W", key: "perf1W" as const, thClass: "w-[70px] text-right" },
+                          { label: "1M", key: "perf1M" as const, thClass: "w-[70px] text-right" },
+                          { label: "3M", key: "perf3M" as const, thClass: "w-[80px] text-right" },
+                          { label: "6M", key: "perf6M" as const, thClass: "w-[80px] text-right" },
+                        ] as const
+                      ).map((h) => (
+                        <th
+                          key={h.label}
+                          scope="col"
+                          className={`sticky top-0 z-10 border-b border-terminal-border bg-terminal-card px-2 py-2 t-label whitespace-nowrap ${h.thClass}`}
+                        >
+                          {h.key ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (sortKey === h.key) {
+                                  setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+                                } else {
+                                  setSortKey(h.key);
+                                  setSortDir(h.key === "theme" ? "asc" : "desc");
+                                }
+                              }}
+                              className="inline-flex items-center gap-1 hover:text-slate-300"
+                            >
+                              <span>{h.label}</span>
+                              <span className={`t-micro ${sortKey === h.key ? "text-accent" : "text-slate-600"}`}>
+                                {sortKey === h.key ? (sortDir === "asc" ? "▲" : "▼") : "↕"}
+                              </span>
+                            </button>
+                          ) : (
+                            h.label
+                          )}
+                        </th>
+                      ))}
+                      <th
+                        scope="col"
+                        className="sticky top-0 z-10 w-[90px] border-b border-terminal-border bg-terminal-card px-2 py-2 text-right t-label whitespace-nowrap"
+                      >
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const key = "rs1m" as const;
+                            if (sortKey === key) {
+                              setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+                            } else {
+                              setSortKey(key);
+                              setSortDir("desc");
+                            }
+                          }}
+                          className="inline-flex items-center gap-1 hover:text-slate-300"
+                        >
+                          <span>RS 1M</span>
+                          <span className={`t-micro ${sortKey === "rs1m" ? "text-accent" : "text-slate-600"}`}>
+                            {sortKey === "rs1m" ? (sortDir === "asc" ? "▲" : "▼") : "↕"}
+                          </span>
+                        </button>
+                      </th>
+                      <th
+                        scope="col"
+                        className="sticky top-0 z-10 w-[120px] border-b border-terminal-border bg-terminal-card px-2 py-2 t-label whitespace-nowrap"
+                      >
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const key = "leaders" as const;
+                            if (sortKey === key) {
+                              setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+                            } else {
+                              setSortKey(key);
+                              setSortDir("asc");
+                            }
+                          }}
+                          className="inline-flex items-center gap-1 hover:text-slate-300"
+                        >
+                          <span>Leaders</span>
+                          <span className={`t-micro ${sortKey === "leaders" ? "text-accent" : "text-slate-600"}`}>
+                            {sortKey === "leaders" ? (sortDir === "asc" ? "▲" : "▼") : "↕"}
+                          </span>
+                        </button>
+                      </th>
+                    </>
+                  )}
                 </tr>
               </thead>
               <tbody>
@@ -3252,24 +3340,17 @@ const ScannerView = memo(function ScannerView({
                       const p = rsPercentileMap.get(r.theme);
                       return p != null && Number.isFinite(p);
                     });
-                    const parentLbPerfVal =
-                      lbSortKey === "1d"
-                        ? avgPerf1D
-                        : lbSortKey === "1w"
-                          ? avgPerf1W
-                          : lbSortKey === "1m"
-                            ? avgPerf1M
-                            : lbSortKey === "3m"
-                              ? avgPerf3M
-                              : lbSortKey === "6m"
-                                ? avgPerf6M
-                                : null;
                     const sortedChildren = [...rows].sort((a, b) => {
-                      const va = getRowSortValue(a, lbSortKey, rsPercentileMap);
-                      const vb = getRowSortValue(b, lbSortKey, rsPercentileMap);
-                      const na = va != null && Number.isFinite(va) ? va : -Infinity;
-                      const nb = vb != null && Number.isFinite(vb) ? vb : -Infinity;
-                      return nb - na;
+                      const val = (row: ApiTheme): number => {
+                        if (lbSortKey === "rs") return rsPercentileMap.get(row.theme) ?? -1;
+                        if (lbSortKey === "1d") return row.perf1D ?? -Infinity;
+                        if (lbSortKey === "1w") return row.perf1W ?? -Infinity;
+                        if (lbSortKey === "1m") return row.perf1M ?? -Infinity;
+                        if (lbSortKey === "3m") return row.perf3M ?? -Infinity;
+                        if (lbSortKey === "6m") return row.perf6M ?? -Infinity;
+                        return -1;
+                      };
+                      return val(b) - val(a);
                     });
                     return (
                       <Fragment key={parent}>
@@ -3312,30 +3393,20 @@ const ScannerView = memo(function ScannerView({
                             </td>
                           ))}
                           <td className="whitespace-nowrap px-2 py-2.5 text-right">
-                            {lbSortKey === "rs" ? (
-                              <div className="flex items-center justify-end gap-1.5">
-                                <div className="h-1 w-6 overflow-hidden rounded-full bg-terminal-elevated/50">
-                                  <div
-                                    className="h-full rounded-full"
-                                    style={{
-                                      width: `${Math.min(100, Math.max(0, hasParentRsPct ? avgRs : 0))}%`,
-                                      background: rsBarColor(hasParentRsPct ? avgRs : null),
-                                    }}
-                                  />
-                                </div>
-                                <span className={`t-mono text-[11px] font-bold tabular-nums ${rsTextClass(hasParentRsPct ? avgRs : null)}`}>
-                                  {hasParentRsPct ? avgRs.toFixed(0) : "—"}
-                                </span>
+                            <div className="flex items-center justify-end gap-1.5">
+                              <div className="h-1 w-6 overflow-hidden rounded-full bg-terminal-elevated/50">
+                                <div
+                                  className="h-full rounded-full"
+                                  style={{
+                                    width: `${Math.min(100, Math.max(0, hasParentRsPct ? avgRs : 0))}%`,
+                                    background: rsBarColor(hasParentRsPct ? avgRs : null),
+                                  }}
+                                />
                               </div>
-                            ) : (
-                              <span
-                                className={`t-mono text-[11px] font-bold tabular-nums ${
-                                  parentLbPerfVal != null && Number.isFinite(parentLbPerfVal) ? pctClass(parentLbPerfVal) : "text-slate-600"
-                                }`}
-                              >
-                                {parentLbPerfVal != null && Number.isFinite(parentLbPerfVal) ? fmtPct(parentLbPerfVal, 2) : "—"}
+                              <span className={`t-mono text-[11px] font-bold tabular-nums ${rsTextClass(hasParentRsPct ? avgRs : null)}`}>
+                                {hasParentRsPct ? avgRs.toFixed(0) : "—"}
                               </span>
-                            )}
+                            </div>
                           </td>
                           <td className="max-w-[120px] truncate whitespace-nowrap px-2 py-2.5 text-right font-mono text-slate-600">
                             —
@@ -3344,7 +3415,7 @@ const ScannerView = memo(function ScannerView({
 
                         {isOpen &&
                           sortedChildren.map((row, cidx) => {
-                            const sortVal = getRowSortValue(row, lbSortKey, rsPercentileMap);
+                            const rsPct = rsPercentileMap.get(row.theme) ?? null;
                             const themeRowSelected =
                               (leaderboardSubSpotlight?.kind === "finviz_theme" &&
                                 leaderboardSubSpotlight.theme === row.theme) ||
@@ -3393,30 +3464,20 @@ const ScannerView = memo(function ScannerView({
                                   </td>
                                 ))}
                                 <td className="whitespace-nowrap px-2 py-2 text-right">
-                                  {lbSortKey === "rs" ? (
-                                    <div className="flex items-center justify-end gap-1.5">
-                                      <div className="h-1 w-5 overflow-hidden rounded-full bg-terminal-elevated/50">
-                                        <div
-                                          className="h-full rounded-full"
-                                          style={{
-                                            width: `${Math.min(100, Math.max(0, sortVal ?? 0))}%`,
-                                            background: rsBarColor(sortVal),
-                                          }}
-                                        />
-                                      </div>
-                                      <span className={`t-mono text-[11px] font-bold tabular-nums ${rsTextClass(sortVal)}`}>
-                                        {sortVal != null && Number.isFinite(sortVal) ? sortVal.toFixed(0) : "—"}
-                                      </span>
+                                  <div className="flex items-center justify-end gap-1.5">
+                                    <div className="h-1 w-5 overflow-hidden rounded-full bg-terminal-elevated/50">
+                                      <div
+                                        className="h-full rounded-full"
+                                        style={{
+                                          width: `${Math.min(100, Math.max(0, rsPct ?? 0))}%`,
+                                          background: rsBarColor(rsPct),
+                                        }}
+                                      />
                                     </div>
-                                  ) : (
-                                    <span
-                                      className={`t-mono text-[11px] font-bold tabular-nums ${
-                                        sortVal != null && Number.isFinite(sortVal) ? pctClass(sortVal) : "text-slate-600"
-                                      }`}
-                                    >
-                                      {sortVal != null && Number.isFinite(sortVal) ? fmtPct(sortVal, 2) : "—"}
+                                    <span className={`t-mono text-[11px] font-bold tabular-nums ${rsTextClass(rsPct)}`}>
+                                      {rsPct != null && Number.isFinite(rsPct) ? rsPct.toFixed(0) : "—"}
                                     </span>
-                                  )}
+                                  </div>
                                 </td>
                                 <td className="max-w-[120px] truncate whitespace-nowrap px-2 py-2 text-right font-mono text-slate-300">
                                   {(row.leaders ?? []).slice(0, 4).join(", ") || "—"}
@@ -4207,12 +4268,12 @@ export function ThemeDashboard() {
 
         <main
           id="main-content"
-          className="flex min-h-0 min-w-0 flex-1 flex-row overflow-x-auto overflow-y-hidden"
+          className="flex min-h-0 min-w-0 flex-1 flex-row overflow-x-auto overflow-y-auto"
           aria-label="Dashboard workspace"
         >
           <div className="flex h-full min-h-0 min-w-0 flex-1 basis-0 flex-col overflow-hidden bg-terminal-bg p-0">
             {tab === "scanner" ? (
-              <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden p-4">
+              <div className="flex max-h-[calc(100vh-7.75rem)] min-h-0 min-w-0 flex-1 flex-col overflow-hidden p-4">
                 <BreakingRiskBanner state={payload?.market_momentum_score?.state} message={payload?.market_momentum_score?.message} />
 
                 {payload ? (
