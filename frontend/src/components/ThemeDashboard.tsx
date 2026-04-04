@@ -234,6 +234,21 @@ type ThemeParentGroup = {
   sortScore: number;
 };
 
+/** Match scanner theme row to a Finviz leaderboard label (names often differ slightly). */
+function findScannerThemeRowForLeaderboard(rowTheme: string, scannerThemes: ApiTheme[]): ApiTheme | null {
+  const exact = scannerThemes.find((t) => t.theme === rowTheme);
+  if (exact) return exact;
+  const tail = rowTheme.toLowerCase().split("·").pop()?.trim().toLowerCase() ?? "";
+  const partial =
+    scannerThemes.find(
+      (t) =>
+        (tail !== "" && t.theme.toLowerCase().includes(tail)) ||
+        rowTheme.toLowerCase().includes(t.theme.toLowerCase()) ||
+        t.theme.toLowerCase().includes(rowTheme.toLowerCase())
+    ) ?? null;
+  return partial;
+}
+
 /** Prefer Finviz leaderboard row (correct ticker universe) over main scanner theme when names align. */
 function resolveThemeRowForSpotlight(
   themeName: string | null | undefined,
@@ -242,7 +257,7 @@ function resolveThemeRowForSpotlight(
 ): ApiTheme | null {
   if (!themeName) return null;
   const fromFdv = finvizThemes.find((t) => t.theme === themeName);
-  const fromScanner = scannerThemes.find((t) => t.theme === themeName);
+  const fromScanner = findScannerThemeRowForLeaderboard(themeName, scannerThemes);
   if (fromFdv?.stocks?.length) return fromFdv;
   if (fromScanner?.stocks?.length) return fromScanner;
   return fromFdv ?? fromScanner ?? null;
@@ -2429,12 +2444,16 @@ function usePrimarySpotlightMovers(
   return { data, loading };
 }
 
-function useLeaderboardSubMovers(sel: LeaderboardSubSpotlight | null, enabled: boolean) {
+function useLeaderboardSubMovers(sel: LeaderboardSubSpotlight | null, enabled: boolean, refetchNonce: number) {
   const [data, setData] = useState<IndustryMoversPayload | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const industryKey = sel?.kind === "industry" ? `${sel.parent}\0${sel.theme}` : "";
-  const finvizKey = sel?.kind === "finviz_theme" ? `${sel.finvizThemeSlug}\0${sel.theme}` : "";
+  const industryKey =
+    sel?.kind === "industry" ? `${(sel.parent ?? "").trim()}\0${(sel.theme ?? "").trim()}` : "";
+  const finvizKey =
+    sel?.kind === "finviz_theme"
+      ? `${(sel.finvizThemeSlug ?? "").trim()}\0${(sel.theme ?? "").trim()}`
+      : "";
 
   useEffect(() => {
     if (!enabled || !sel) {
@@ -2449,14 +2468,14 @@ function useLeaderboardSubMovers(sel: LeaderboardSubSpotlight | null, enabled: b
       sel.kind === "industry"
         ? (() => {
             const p = new URLSearchParams();
-            p.set("industry", sel.theme);
-            p.set("parent", sel.parent);
+            p.set("industry", (sel.theme ?? "").trim());
+            p.set("parent", (sel.parent ?? "").trim());
             return `${API_BASE_URL}/api/industry/subindustry-movers?${p.toString()}`;
           })()
         : (() => {
             const p = new URLSearchParams();
-            p.set("slug", sel.finvizThemeSlug);
-            p.set("label", sel.theme);
+            p.set("slug", (sel.finvizThemeSlug ?? "").trim());
+            p.set("label", (sel.theme ?? "").trim());
             return `${API_BASE_URL}/api/themes/finviz-movers?${p.toString()}`;
           })();
 
@@ -2480,7 +2499,7 @@ function useLeaderboardSubMovers(sel: LeaderboardSubSpotlight | null, enabled: b
     return () => {
       active = false;
     };
-  }, [enabled, industryKey, finvizKey]);
+  }, [enabled, industryKey, finvizKey, refetchNonce]);
 
   return { data, loading };
 }
@@ -2517,6 +2536,7 @@ const ScannerView = memo(function ScannerView({
   const [drilldownLabel, setDrilldownLabel] = useState<string | null>(null);
   const [expandedIndustryParents, setExpandedIndustryParents] = useState<Set<string>>(new Set());
   const [leaderboardSubSpotlight, setLeaderboardSubSpotlight] = useState<LeaderboardSubSpotlight | null>(null);
+  const [leaderboardSubMoversNonce, setLeaderboardSubMoversNonce] = useState(0);
   const [expandedParents, setExpandedParents] = useState<Set<string>>(new Set());
   const [spotlightStocksOpen, setSpotlightStocksOpen] = useState(false);
   const now_et_h = new Date().toLocaleString("en-US", { timeZone: "America/New_York", hour: "numeric", hour12: false });
@@ -2582,9 +2602,27 @@ const ScannerView = memo(function ScannerView({
 
   const activateThemeLeaderboardRow = useCallback(
     (row: ApiTheme) => {
+      console.log("[spotlight] activating:", row.theme, row.finvizThemeSlug);
+      const fullRow =
+        themes.find((t) => t.theme === row.theme) ??
+        themes.find((t) => {
+          const tail = row.theme.toLowerCase().split("·").pop()?.trim().toLowerCase() ?? "";
+          return (
+            (tail !== "" && t.theme.toLowerCase().includes(tail)) ||
+            row.theme.toLowerCase().includes(t.theme.toLowerCase()) ||
+            t.theme.toLowerCase().includes(row.theme.toLowerCase())
+          );
+        }) ??
+        row;
+      console.log("[stocks] row.theme:", row.theme, "→ matched:", fullRow?.theme, "stocks:", fullRow?.stocks?.length);
       setSpotlightThemeName(row.theme);
       const finvizSlug = (row.finvizThemeSlug ?? "").trim();
       if (finvizSlug) {
+        setLeaderboardSubMoversNonce((n) => n + 1);
+        const tc =
+          (fullRow.stocks?.length ?? 0) > 0
+            ? fullRow.stocks!.length
+            : (fullRow.totalCount ?? row.totalCount ?? 0);
         setLeaderboardSubSpotlight({
           kind: "finviz_theme",
           theme: row.theme,
@@ -2593,14 +2631,14 @@ const ScannerView = memo(function ScannerView({
           perf1D: row.perf1D ?? null,
           perf1M: row.perf1M ?? null,
           perfYTD: row.perfYTD ?? null,
-          totalCount: row.totalCount ?? 0,
+          totalCount: tc,
           leaders: row.leaders ?? [],
         });
       } else {
         setLeaderboardSubSpotlight(null);
       }
     },
-    [setSpotlightThemeName]
+    [setSpotlightThemeName, themes]
   );
 
   const { payload: finvizLeaderboardPayload, loading: finvizLbLoading, error: finvizLbError } = useFdvLeaderboard(leaderboardMode);
@@ -2649,20 +2687,42 @@ const ScannerView = memo(function ScannerView({
 
   const themesLeaderboardGroups = useMemo(() => {
     if (leaderboardMode !== "themes") return [];
-    const groups = groupThemesByParent(sortedLeaderboardRows.slice(0, 160), rsPercentileMap);
-    return [...groups].sort(
+    const baseGroups = groupThemesByParent(sortedLeaderboardRows.slice(0, 160), rsPercentileMap);
+    const enriched = baseGroups.map((g) => {
+      const rows = g.rows.map((r) => {
+        const match = themes.find((t) => t.theme === r.theme);
+        if (match && (match.totalCount ?? 0) > 0) {
+          return { ...r, totalCount: match.totalCount };
+        }
+        return r;
+      });
+      const totalStockCount = rows.reduce((sum, r) => sum + (r.totalCount ?? 0), 0);
+      return { ...g, rows, totalStockCount };
+    });
+    return [...enriched].sort(
       (a, b) => lbSortMul * (getParentLbSortValue(b, lbSortKey) - getParentLbSortValue(a, lbSortKey))
     );
-  }, [leaderboardMode, sortedLeaderboardRows, rsPercentileMap, lbSortKey, lbSortMul]);
+  }, [leaderboardMode, sortedLeaderboardRows, rsPercentileMap, lbSortKey, lbSortMul, themes]);
 
   const industryLeaderboardGroups = useMemo(() => {
     if (leaderboardMode !== "industry") return [];
     const slice = finvizFilteredRows.slice(0, 160) as ThemeIndustryRow[];
-    const groups = groupIndustriesByParent(slice, rsPercentileMap);
-    return [...groups].sort(
+    const baseGroups = groupIndustriesByParent(slice, rsPercentileMap);
+    const enriched = baseGroups.map((g) => {
+      const rows = g.rows.map((r) => {
+        const match = themes.find((t) => t.theme === r.theme);
+        if (match && (match.totalCount ?? 0) > 0) {
+          return { ...r, totalCount: match.totalCount };
+        }
+        return r;
+      });
+      const totalStockCount = rows.reduce((sum, r) => sum + (r.totalCount ?? 0), 0);
+      return { ...g, rows, totalStockCount };
+    });
+    return [...enriched].sort(
       (a, b) => lbSortMul * (getParentLbSortValue(b, lbSortKey) - getParentLbSortValue(a, lbSortKey))
     );
-  }, [leaderboardMode, finvizFilteredRows, rsPercentileMap, lbSortKey, lbSortMul]);
+  }, [leaderboardMode, finvizFilteredRows, rsPercentileMap, lbSortKey, lbSortMul, themes]);
 
   const rsRows = useMemo(() => {
     return sortedThemes
@@ -2690,7 +2750,8 @@ const ScannerView = memo(function ScannerView({
   );
   const { data: industryMovers, loading: industryMoversLoading } = useLeaderboardSubMovers(
     leaderboardSubSpotlight,
-    showLeaderboardSubSpot
+    showLeaderboardSubSpot,
+    leaderboardSubMoversNonce
   );
 
   const industrySpotlightMoverStats = useMemo(() => {
@@ -2734,7 +2795,20 @@ const ScannerView = memo(function ScannerView({
 
   const subSpotlightThemeRow = useMemo(() => {
     if (!leaderboardSubSpotlight) return null;
-    return resolveThemeRowForSpotlight(leaderboardSubSpotlight.theme, themes, finvizRows);
+    const scannerRow = findScannerThemeRowForLeaderboard(leaderboardSubSpotlight.theme, themes);
+    const finvizRow = finvizRows.find((t) => t.theme === leaderboardSubSpotlight.theme) ?? null;
+    if (scannerRow && finvizRow) {
+      return {
+        ...finvizRow,
+        ...scannerRow,
+        stocks: scannerRow.stocks?.length ? scannerRow.stocks : (finvizRow.stocks ?? []),
+        totalCount:
+          (scannerRow.stocks?.length ?? 0) > 0
+            ? scannerRow.stocks!.length
+            : (scannerRow.totalCount ?? finvizRow.totalCount ?? 0),
+      };
+    }
+    return scannerRow ?? finvizRow ?? resolveThemeRowForSpotlight(leaderboardSubSpotlight.theme, themes, finvizRows);
   }, [themes, finvizRows, leaderboardSubSpotlight]);
 
   const spotlightRsPercentile = spotlightTheme?.theme
@@ -2796,8 +2870,9 @@ const ScannerView = memo(function ScannerView({
                     <span className="font-mono">{leaderboardSubSpotlightBadge(leaderboardSubSpotlight)}</span>
                     <span className="mx-1 text-white/40">·</span>
                     <span>
-                      {(spotlightStockCount(subSpotlightThemeRow) || industrySpotlightMoverStats?.n) ??
-                        leaderboardSubSpotlight.totalCount}
+                      {(subSpotlightThemeRow?.stocks?.length ?? 0) > 0
+                        ? subSpotlightThemeRow!.stocks!.length
+                        : (subSpotlightThemeRow?.totalCount ?? leaderboardSubSpotlight.totalCount) ?? 0}
                     </span>
                     <span className="text-white/60"> stocks</span>
                     {subSpotlightThemeRow != null ? (
@@ -2937,7 +3012,11 @@ const ScannerView = memo(function ScannerView({
                   </div>
                 </div>
                 <SpotlightAllStocksSection
-                  totalCount={spotlightStockCount(subSpotlightThemeRow) || leaderboardSubSpotlight.totalCount}
+                  totalCount={
+                    (subSpotlightThemeRow?.stocks?.length ?? 0) > 0
+                      ? subSpotlightThemeRow!.stocks!.length
+                      : (subSpotlightThemeRow?.totalCount ?? leaderboardSubSpotlight.totalCount) ?? 0
+                  }
                   stocks={subSpotlightThemeRow?.stocks ?? []}
                   open={spotlightStocksOpen}
                   onToggle={() => setSpotlightStocksOpen((o) => !o)}
@@ -3467,6 +3546,8 @@ const ScannerView = memo(function ScannerView({
                                   }`}
                                   onClick={(e) => {
                                     e.stopPropagation();
+                                    console.log("[spotlight] activating:", industry.theme, industry.finvizThemeSlug);
+                                    setLeaderboardSubMoversNonce((n) => n + 1);
                                     setSpotlightThemeName(industry.theme);
                                     setLeaderboardSubSpotlight({
                                       kind: "industry",
