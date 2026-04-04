@@ -224,36 +224,81 @@ type ThemeParentGroup = {
   sortScore: number;
 };
 
-function groupThemesByParent(themes: ApiTheme[]): ThemeParentGroup[] {
+/** Rank-based 1–99 percentile of raw `relativeStrength1M` across the leaderboard universe (for RS column coloring). */
+function normaliseRs(themes: ApiTheme[]): Map<string, number> {
+  const valid = themes
+    .map((t) => ({ theme: t.theme, rs: t.relativeStrength1M }))
+    .filter((x): x is { theme: string; rs: number } => x.rs != null && Number.isFinite(x.rs));
+
+  if (valid.length === 0) return new Map();
+
+  const sorted = [...valid].sort((a, b) => a.rs - b.rs);
+  const n = sorted.length;
+  const map = new Map<string, number>();
+
+  sorted.forEach((item, i) => {
+    const percentile = Math.round(1 + (i / (n - 1 || 1)) * 98);
+    map.set(item.theme, percentile);
+  });
+
+  return map;
+}
+
+function groupThemesByParent(themes: ApiTheme[], rsPercentileMap: Map<string, number>): ThemeParentGroup[] {
   const map = new Map<string, ApiTheme[]>();
   for (const t of themes) {
     const p = getParentCategory(t.theme);
     if (!map.has(p)) map.set(p, []);
     map.get(p)!.push(t);
   }
-  return [...map.entries()]
-    .map(([parent, rows]) => {
-      const rsVals = rows.map((r) => r.relativeStrength1M).filter((x): x is number => x != null && Number.isFinite(x));
-      const avgRs = rsVals.length ? rsVals.reduce((s, v) => s + v, 0) / rsVals.length : 0;
-      const avgPerf1D = avgFiniteField(rows, (r) => r.perf1D);
-      const avgPerf1W = avgFiniteField(rows, (r) => r.perf1W);
-      const avgPerf1M = avgFiniteField(rows, (r) => r.perf1M);
-      const avgPerf3M = avgFiniteField(rows, (r) => r.perf3M);
-      const avgPerf6M = avgFiniteField(rows, (r) => r.perf6M);
-      const sortScore = rsVals.length > 0 ? avgRs : (avgPerf1M ?? Number.NEGATIVE_INFINITY);
-      return {
-        parent,
-        rows,
-        avgRs,
-        avgPerf1D,
-        avgPerf1W,
-        avgPerf1M,
-        avgPerf3M,
-        avgPerf6M,
-        sortScore,
-      };
-    })
-    .sort((a, b) => b.sortScore - a.sortScore);
+  return [...map.entries()].map(([parent, rows]) => {
+    const pctVals = rows.map((r) => rsPercentileMap.get(r.theme)).filter((x): x is number => x != null && Number.isFinite(x));
+    const avgRs = pctVals.length ? pctVals.reduce((s, v) => s + v, 0) / pctVals.length : 0;
+    const avgPerf1D = avgFiniteField(rows, (r) => r.perf1D);
+    const avgPerf1W = avgFiniteField(rows, (r) => r.perf1W);
+    const avgPerf1M = avgFiniteField(rows, (r) => r.perf1M);
+    const avgPerf3M = avgFiniteField(rows, (r) => r.perf3M);
+    const avgPerf6M = avgFiniteField(rows, (r) => r.perf6M);
+    const sortScore = pctVals.length > 0 ? avgRs : (avgPerf1M ?? Number.NEGATIVE_INFINITY);
+    return {
+      parent,
+      rows,
+      avgRs,
+      avgPerf1D,
+      avgPerf1W,
+      avgPerf1M,
+      avgPerf3M,
+      avgPerf6M,
+      sortScore,
+    };
+  });
+}
+
+function ThemePerfStrip4({ t }: { t: Pick<ApiTheme, "perf1D" | "perf1W" | "perf1M" | "perf6M"> | null | undefined }) {
+  if (!t) return null;
+  return (
+    <div className="mt-2 grid grid-cols-4 gap-2">
+      {(
+        [
+          { label: "1D" as const, val: t.perf1D },
+          { label: "1W" as const, val: t.perf1W },
+          { label: "1M" as const, val: t.perf1M },
+          { label: "6M" as const, val: t.perf6M },
+        ] as const
+      ).map((cell) => (
+        <div key={cell.label} className="rounded-lg border border-terminal-border/70 bg-terminal-bg/50 px-2 py-1.5 text-center">
+          <p className="t-label">{cell.label}</p>
+          <p
+            className={`mt-0.5 t-mono text-[11px] font-semibold tabular-nums ${
+              cell.val != null && Number.isFinite(cell.val) ? pctClass(cell.val) : "text-slate-500"
+            }`}
+          >
+            {cell.val != null && Number.isFinite(cell.val) ? fmtPct(cell.val, 2) : "—"}
+          </p>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 function rsTextClass(rs: number | null | undefined): string {
@@ -2050,6 +2095,7 @@ const ScannerView = memo(function ScannerView({
     "theme" | "perf1D" | "perf1W" | "perf1M" | "perf3M" | "perf6M" | "rs1m" | "qual" | "leaders" | null
   >(null);
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  const [lbSortKey, setLbSortKey] = useState<"rs" | "6m" | "3m" | "1m">("rs");
 
   const themes = payload.themes ?? [];
   const sortedThemes = useMemo(() => {
@@ -2112,6 +2158,7 @@ const ScannerView = memo(function ScannerView({
 
   const { payload: finvizLeaderboardPayload, loading: finvizLbLoading, error: finvizLbError } = useFdvLeaderboard(leaderboardMode);
   const finvizRows = finvizLeaderboardPayload?.themes ?? [];
+  const rsPercentileMap = useMemo(() => normaliseRs(finvizLeaderboardPayload?.themes ?? []), [finvizLeaderboardPayload?.themes]);
   const finvizFilteredRows = useMemo(() => {
     let rows = finvizRows;
     // In industry mode, if a thematic drilldown is active, restrict to that bucket.
@@ -2249,8 +2296,14 @@ const ScannerView = memo(function ScannerView({
 
   const themesLeaderboardGroups = useMemo(() => {
     if (leaderboardMode !== "themes") return [];
-    return groupThemesByParent(sortedLeaderboardRows.slice(0, 160));
-  }, [leaderboardMode, sortedLeaderboardRows]);
+    const groups = groupThemesByParent(sortedLeaderboardRows.slice(0, 160), rsPercentileMap);
+    return [...groups].sort((a, b) => {
+      if (lbSortKey === "6m") return (b.avgPerf6M ?? -Infinity) - (a.avgPerf6M ?? -Infinity);
+      if (lbSortKey === "3m") return (b.avgPerf3M ?? -Infinity) - (a.avgPerf3M ?? -Infinity);
+      if (lbSortKey === "1m") return (b.avgPerf1M ?? -Infinity) - (a.avgPerf1M ?? -Infinity);
+      return b.avgRs - a.avgRs;
+    });
+  }, [leaderboardMode, sortedLeaderboardRows, rsPercentileMap, lbSortKey]);
 
   const rsRows = useMemo(() => {
     return sortedThemes
@@ -2317,6 +2370,15 @@ const ScannerView = memo(function ScannerView({
     return scored.slice(0, 12);
   }, [spotlightTheme]);
 
+  const subSpotlightThemeRow = useMemo(() => {
+    if (!leaderboardSubSpotlight) return null;
+    return themes.find((t) => t.theme === leaderboardSubSpotlight.theme) ?? null;
+  }, [themes, leaderboardSubSpotlight]);
+
+  const spotlightRsPercentile = spotlightTheme?.theme
+    ? (rsPercentileMap.get(spotlightTheme.theme) ?? null)
+    : null;
+
   return (
     <div className="flex h-full min-h-0 w-full min-w-0 flex-1 flex-row gap-3 overflow-hidden">
       {/* Left: Market + Brief + VIX */}
@@ -2337,7 +2399,7 @@ const ScannerView = memo(function ScannerView({
       {/* Middle: RS + Spotlight + Constituents */}
       <div className="fintech-scroll flex w-[420px] min-w-[420px] shrink-0 flex-col gap-3 overflow-y-auto pr-1">
         <RsSnapshot rows={rsRows} />
-        <div className="overflow-hidden rounded-xl border border-terminal-border bg-terminal-card shadow-sm">
+        <div className="min-h-[320px] overflow-hidden rounded-xl border border-terminal-border bg-terminal-card shadow-sm">
           {leaderboardSubSpotlight ? (
             <>
               <div className={`px-4 pb-3.5 pt-3 ${subIndustryBannerShellClass(leaderboardSubSpotlight.perf1D)}`}>
@@ -2369,6 +2431,12 @@ const ScannerView = memo(function ScannerView({
                     <span className="mx-1 text-white/40">·</span>
                     <span>{industrySpotlightMoverStats?.n ?? leaderboardSubSpotlight.totalCount}</span>
                     <span className="text-white/60"> stocks</span>
+                    {subSpotlightThemeRow != null ? (
+                      <>
+                        <span className="mx-1 text-white/40">·</span>
+                        <span className="text-white/75">{subSpotlightThemeRow.qualifiedCount} qualified</span>
+                      </>
+                    ) : null}
                   </span>
                 </div>
               </div>
@@ -2421,10 +2489,15 @@ const ScannerView = memo(function ScannerView({
                 <p className="t-micro text-slate-500">
                   RS{" "}
                   <span className="font-mono text-slate-400">
-                    {leaderboardSubSpotlight.relativeStrength1M == null ||
-                    !Number.isFinite(leaderboardSubSpotlight.relativeStrength1M)
-                      ? "—"
-                      : leaderboardSubSpotlight.relativeStrength1M.toFixed(1)}
+                    {(() => {
+                      const raw = leaderboardSubSpotlight.relativeStrength1M;
+                      const rawOk = raw != null && Number.isFinite(raw);
+                      const p = rsPercentileMap.get(leaderboardSubSpotlight.theme);
+                      const pOk = p != null && Number.isFinite(p);
+                      if (rawOk) return `${raw.toFixed(1)}${pOk ? ` (#${p})` : ""}`;
+                      if (pOk) return `— (#${p})`;
+                      return "—";
+                    })()}
                   </span>
                   <span className="mx-2 text-slate-700">|</span>
                   Leaders{" "}
@@ -2432,6 +2505,7 @@ const ScannerView = memo(function ScannerView({
                     {leaderboardSubSpotlight.leaders.slice(0, 5).join(", ") || "—"}
                   </span>
                 </p>
+                <ThemePerfStrip4 t={subSpotlightThemeRow ?? undefined} />
                 {industryMoversLoading ? (
                   <p className="text-xs text-slate-500">Loading movers…</p>
                 ) : industryMovers && !industryMovers.ok ? (
@@ -2516,7 +2590,14 @@ const ScannerView = memo(function ScannerView({
             <>
               <header className="border-b border-terminal-border px-4 py-3">
                 <h3 className="t-section">Thematic Spotlight</h3>
-                <p className="mt-0.5 truncate t-micro">{spotlightTheme?.theme ?? "—"}</p>
+                <p className="mt-0.5 truncate text-[12px] font-semibold text-slate-200">{spotlightTheme?.theme ?? "—"}</p>
+                {spotlightTheme ? (
+                  <p className="mt-0.5 truncate t-micro text-slate-500">
+                    <span className="font-mono text-slate-400">{industryThemeBadgeCode(spotlightTheme.theme)}</span>
+                    {" · "}
+                    {spotlightTheme.totalCount} stocks · {spotlightTheme.qualifiedCount} qualified
+                  </p>
+                ) : null}
               </header>
               <div className="px-4 py-3">
             {!spotlightTheme && !leaderboardSubSpotlight ? (
@@ -2524,17 +2605,23 @@ const ScannerView = memo(function ScannerView({
             ) : spotlightTheme ? (
               <>
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <p className="text-[12px] font-semibold text-white">{spotlightTheme.theme}</p>
+                  <p className="t-micro text-slate-500">
+                    Leaders:{" "}
+                    <span className="font-mono text-slate-300">{(spotlightTheme.leaders ?? []).slice(0, 6).join(", ") || "—"}</span>
+                  </p>
                   <p className="t-mono text-slate-400">
                     RS{" "}
-                    {spotlightTheme.relativeStrength1M == null || !Number.isFinite(spotlightTheme.relativeStrength1M)
-                      ? "—"
-                      : spotlightTheme.relativeStrength1M.toFixed(1)}
+                    {(() => {
+                      const raw = spotlightTheme.relativeStrength1M;
+                      const rawOk = raw != null && Number.isFinite(raw);
+                      const pOk = spotlightRsPercentile != null && Number.isFinite(spotlightRsPercentile);
+                      if (rawOk) return `${raw.toFixed(1)}${pOk ? ` (#${spotlightRsPercentile})` : ""}`;
+                      if (pOk) return `— (#${spotlightRsPercentile})`;
+                      return "—";
+                    })()}
                   </p>
                 </div>
-                <p className="mt-1 t-micro">
-                  Leaders: <span className="font-mono text-slate-300">{(spotlightTheme.leaders ?? []).slice(0, 6).join(", ") || "—"}</span>
-                </p>
+                <ThemePerfStrip4 t={spotlightTheme} />
                 <div className="mt-3 grid grid-cols-2 gap-2">
                   {(uniSpotlight?.best ?? []).slice(0, 4).map((x) => {
                     const symU = String(x.ticker || "").toUpperCase();
@@ -2725,6 +2812,24 @@ const ScannerView = memo(function ScannerView({
                   Industry
                 </button>
               </div>
+              {leaderboardMode === "themes" ? (
+                <div className="flex items-center gap-1 ml-2">
+                  {(["rs", "6m", "3m", "1m"] as const).map((k) => (
+                    <button
+                      key={k}
+                      type="button"
+                      onClick={() => setLbSortKey(k)}
+                      className={`rounded border px-2 py-1 text-[11px] font-mono transition-colors ${
+                        lbSortKey === k
+                          ? "border-cyan-700/50 bg-cyan-900/50 text-cyan-300"
+                          : "border-terminal-border bg-terminal-elevated/30 text-slate-400 hover:text-slate-200"
+                      }`}
+                    >
+                      {k === "rs" ? "RS Score" : k === "6m" ? "6M %" : k === "3m" ? "3M %" : "1M %"}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
               <div className="flex items-center gap-2 rounded-md border border-terminal-border bg-terminal-bg px-2 py-2">
                 <Search className="h-4 w-4 text-slate-500" aria-hidden />
                 <input
@@ -2952,17 +3057,15 @@ const ScannerView = memo(function ScannerView({
                       idx
                     ) => {
                     const isOpen = expandedParents.has(parent);
-                    const rsVals = rows.map((r) => r.relativeStrength1M).filter((x): x is number => x != null && Number.isFinite(x));
-                    const hasRsAverage = rsVals.length > 0;
+                    const hasParentRsPct = rows.some((r) => {
+                      const p = rsPercentileMap.get(r.theme);
+                      return p != null && Number.isFinite(p);
+                    });
                     const sortedChildren = [...rows].sort((a, b) => {
-                      const ar = a.relativeStrength1M;
-                      const br = b.relativeStrength1M;
-                      const aOk = ar != null && Number.isFinite(ar);
-                      const bOk = br != null && Number.isFinite(br);
-                      if (aOk && bOk) return br - ar;
-                      if (aOk) return -1;
-                      if (bOk) return 1;
-                      return (b.perf1M ?? Number.NEGATIVE_INFINITY) - (a.perf1M ?? Number.NEGATIVE_INFINITY);
+                      if (lbSortKey === "6m") return (b.perf6M ?? -Infinity) - (a.perf6M ?? -Infinity);
+                      if (lbSortKey === "3m") return (b.perf3M ?? -Infinity) - (a.perf3M ?? -Infinity);
+                      if (lbSortKey === "1m") return (b.perf1M ?? -Infinity) - (a.perf1M ?? -Infinity);
+                      return (rsPercentileMap.get(b.theme) ?? 0) - (rsPercentileMap.get(a.theme) ?? 0);
                     });
                     return (
                       <Fragment key={parent}>
@@ -3006,13 +3109,13 @@ const ScannerView = memo(function ScannerView({
                                 <div
                                   className="h-full rounded-full"
                                   style={{
-                                    width: `${Math.min(100, Math.max(0, avgRs))}%`,
-                                    background: rsBarColor(avgRs),
+                                    width: `${Math.min(100, Math.max(0, hasParentRsPct ? avgRs : 0))}%`,
+                                    background: rsBarColor(hasParentRsPct ? avgRs : null),
                                   }}
                                 />
                               </div>
-                              <span className={`t-mono text-[11px] font-bold tabular-nums ${rsTextClass(hasRsAverage ? avgRs : null)}`}>
-                                {hasRsAverage ? avgRs.toFixed(0) : "—"}
+                              <span className={`t-mono text-[11px] font-bold tabular-nums ${rsTextClass(hasParentRsPct ? avgRs : null)}`}>
+                                {hasParentRsPct ? avgRs.toFixed(0) : "—"}
                               </span>
                             </div>
                           </td>
@@ -3023,7 +3126,7 @@ const ScannerView = memo(function ScannerView({
 
                         {isOpen &&
                           sortedChildren.map((row, cidx) => {
-                            const rs = row.relativeStrength1M ?? null;
+                            const rsPct = rsPercentileMap.get(row.theme) ?? null;
                             const qRatio = Number.isFinite(row.relativeStrengthQualifierRatio)
                               ? row.relativeStrengthQualifierRatio
                               : null;
@@ -3076,13 +3179,13 @@ const ScannerView = memo(function ScannerView({
                                       <div
                                         className="h-full rounded-full"
                                         style={{
-                                          width: `${Math.min(100, Math.max(0, rs ?? 0))}%`,
-                                          background: rsBarColor(rs),
+                                          width: `${Math.min(100, Math.max(0, rsPct ?? 0))}%`,
+                                          background: rsBarColor(rsPct),
                                         }}
                                       />
                                     </div>
-                                    <span className={`t-mono text-[11px] font-bold tabular-nums ${rsTextClass(rs)}`}>
-                                      {rs != null ? rs.toFixed(1) : "—"}
+                                    <span className={`t-mono text-[11px] font-bold tabular-nums ${rsTextClass(rsPct)}`}>
+                                      {rsPct != null && Number.isFinite(rsPct) ? rsPct.toFixed(0) : "—"}
                                     </span>
                                   </div>
                                 </td>
