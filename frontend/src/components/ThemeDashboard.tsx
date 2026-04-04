@@ -1,4 +1,4 @@
-import React, { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type JSX } from "react";
+import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type JSX } from "react";
 import { AlertTriangle, BarChart2, BarChart3, ChevronRight, Info, LayoutGrid, ListPlus, Moon, Plus, Search, Star, Sunrise } from "lucide-react";
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import MarketBreadth from "./MarketBreadth";
@@ -316,6 +316,38 @@ function groupThemesByParent(themes: ApiTheme[], rsPercentileMap: Map<string, nu
   });
 }
 
+function groupIndustriesByParent(rows: ThemeIndustryRow[], rsPercentileMap: Map<string, number>): ThemeParentGroup[] {
+  const map = new Map<string, ThemeIndustryRow[]>();
+  for (const t of rows) {
+    const p = getIndustryParent(t.theme);
+    if (!map.has(p)) map.set(p, []);
+    map.get(p)!.push(t);
+  }
+  return [...map.entries()].map(([parent, rows]) => {
+    const totalStockCount = rows.reduce((sum, r) => sum + (r.totalCount ?? 0), 0);
+    const pctVals = rows.map((r) => rsPercentileMap.get(r.theme)).filter((x): x is number => x != null && Number.isFinite(x));
+    const avgRs = pctVals.length ? pctVals.reduce((s, v) => s + v, 0) / pctVals.length : 0;
+    const avgPerf1D = avgFiniteField(rows, (r) => r.perf1D);
+    const avgPerf1W = avgFiniteField(rows, (r) => r.perf1W);
+    const avgPerf1M = avgFiniteField(rows, (r) => r.perf1M);
+    const avgPerf3M = avgFiniteField(rows, (r) => r.perf3M);
+    const avgPerf6M = avgFiniteField(rows, (r) => r.perf6M);
+    const sortScore = pctVals.length > 0 ? avgRs : (avgPerf1M ?? Number.NEGATIVE_INFINITY);
+    return {
+      parent,
+      rows,
+      totalStockCount,
+      avgRs,
+      avgPerf1D,
+      avgPerf1W,
+      avgPerf1M,
+      avgPerf3M,
+      avgPerf6M,
+      sortScore,
+    };
+  });
+}
+
 function sortSpotlightStocksAll(stocks: ApiStock[]): ApiStock[] {
   const gradeRank = (g: string | undefined) => (g === "A+" ? 2 : g === "A" ? 1 : 0);
   return [...stocks].sort((a, b) => {
@@ -467,6 +499,127 @@ function getIndustryAdr(row: ThemeIndustryRow): number | null {
   const raw = row.adr ?? row.adr_pct;
   if (raw == null || !Number.isFinite(raw)) return null;
   return raw;
+}
+
+/** Finviz industry names → macro sectors (groups.ashx industry view). */
+const INDUSTRY_PARENT_MAP: Record<string, string> = {
+  Semiconductors: "Technology",
+  "Semiconductor Equipment & Materials": "Technology",
+  "Software—Application": "Technology",
+  "Software—Infrastructure": "Technology",
+  "Information Technology Services": "Technology",
+  "Communication Equipment": "Technology",
+  "Computer Hardware": "Technology",
+  "Electronic Components": "Technology",
+  "Electronics & Computer Distribution": "Technology",
+  "Scientific & Technical Instruments": "Technology",
+  Solar: "Technology",
+
+  Biotechnology: "Healthcare",
+  "Drug Manufacturers—General": "Healthcare",
+  "Drug Manufacturers—Specialty & Generic": "Healthcare",
+  "Medical Devices": "Healthcare",
+  "Medical Instruments & Supplies": "Healthcare",
+  "Diagnostics & Research": "Healthcare",
+  "Healthcare Plans": "Healthcare",
+  "Medical Care Facilities": "Healthcare",
+  "Pharmaceutical Retailers": "Healthcare",
+  "Health Information Services": "Healthcare",
+
+  "Oil & Gas E&P": "Energy",
+  "Oil & Gas Integrated": "Energy",
+  "Oil & Gas Midstream": "Energy",
+  "Oil & Gas Refining & Marketing": "Energy",
+  "Oil & Gas Equipment & Services": "Energy",
+  "Oil & Gas Drilling": "Energy",
+  Uranium: "Energy",
+  Coal: "Energy",
+
+  "Banks—Diversified": "Financials",
+  "Banks—Regional": "Financials",
+  "Insurance—Diversified": "Financials",
+  "Insurance—Life": "Financials",
+  "Insurance—Property & Casualty": "Financials",
+  "Insurance—Specialty": "Financials",
+  "Asset Management": "Financials",
+  "Capital Markets": "Financials",
+  "Financial Data & Stock Exchanges": "Financials",
+  "Credit Services": "Financials",
+  "Mortgage Finance": "Financials",
+
+  "Auto Manufacturers": "Consumer Discretionary",
+  "Auto Parts": "Consumer Discretionary",
+  "Specialty Retail": "Consumer Discretionary",
+  "Apparel Retail": "Consumer Discretionary",
+  "Apparel Manufacturing": "Consumer Discretionary",
+  Restaurants: "Consumer Discretionary",
+  Leisure: "Consumer Discretionary",
+  Gambling: "Consumer Discretionary",
+  "Travel Services": "Consumer Discretionary",
+  Lodging: "Consumer Discretionary",
+  "Residential Construction": "Consumer Discretionary",
+
+  "Beverages—Non-Alcoholic": "Consumer Staples",
+  "Beverages—Alcoholic": "Consumer Staples",
+  "Beverages—Brewers": "Consumer Staples",
+  Confectioners: "Consumer Staples",
+  "Farm Products": "Consumer Staples",
+  "Food Distribution": "Consumer Staples",
+  "Grocery Stores": "Consumer Staples",
+  "Household & Personal Products": "Consumer Staples",
+  "Packaged Foods": "Consumer Staples",
+  Tobacco: "Consumer Staples",
+
+  "Aerospace & Defense": "Industrials",
+  Airlines: "Industrials",
+  "Airports & Air Services": "Industrials",
+  "Farm & Heavy Construction Machinery": "Industrials",
+  "Industrial Distribution": "Industrials",
+  "Specialty Industrial Machinery": "Industrials",
+  "Metal Fabrication": "Industrials",
+  "Pollution & Treatment Controls": "Industrials",
+  "Waste Management": "Industrials",
+  "Engineering & Construction": "Industrials",
+  "Infrastructure Operations": "Industrials",
+
+  Aluminum: "Materials",
+  Copper: "Materials",
+  Gold: "Materials",
+  Silver: "Materials",
+  Steel: "Materials",
+  Chemicals: "Materials",
+  "Agricultural Inputs": "Materials",
+  "Lumber & Wood Production": "Materials",
+  "Paper & Paper Products": "Materials",
+
+  "REIT—Retail": "Real Estate",
+  "REIT—Office": "Real Estate",
+  "REIT—Industrial": "Real Estate",
+  "REIT—Residential": "Real Estate",
+  "REIT—Healthcare Facilities": "Real Estate",
+  "REIT—Specialty": "Real Estate",
+  "REIT—Diversified": "Real Estate",
+  "REIT—Mortgage": "Real Estate",
+  "Real Estate Services": "Real Estate",
+  "Real Estate—Development": "Real Estate",
+
+  "Utilities—Regulated Electric": "Utilities",
+  "Utilities—Regulated Gas": "Utilities",
+  "Utilities—Regulated Water": "Utilities",
+  "Utilities—Renewable": "Utilities",
+  "Utilities—Independent Power Producers": "Utilities",
+
+  "Telecom Services": "Communication Services",
+  Entertainment: "Communication Services",
+  "Electronic Gaming & Multimedia": "Communication Services",
+  "Internet Content & Information": "Communication Services",
+  Publishing: "Communication Services",
+  Broadcasting: "Communication Services",
+  "Advertising Agencies": "Communication Services",
+};
+
+function getIndustryParent(industryName: string): string {
+  return INDUSTRY_PARENT_MAP[industryName] ?? "Other";
 }
 
 type ApiPayload = {
@@ -2228,8 +2381,7 @@ const ScannerView = memo(function ScannerView({
   const [leaderboardMode, setLeaderboardMode] = useState<"themes" | "industry">("themes");
   // drilldownLabel: when set (industry mode only), filter rows to this thematic bucket.
   const [drilldownLabel, setDrilldownLabel] = useState<string | null>(null);
-  // expandedTheme: for accordion-style industry grouping
-  const [expandedTheme, setExpandedTheme] = useState<string | null>(null);
+  const [expandedIndustryParents, setExpandedIndustryParents] = useState<Set<string>>(new Set());
   const [leaderboardSubSpotlight, setLeaderboardSubSpotlight] = useState<LeaderboardSubSpotlight | null>(null);
   const [expandedParents, setExpandedParents] = useState<Set<string>>(new Set());
   const [spotlightStocksOpen, setSpotlightStocksOpen] = useState(false);
@@ -2255,10 +2407,13 @@ const ScannerView = memo(function ScannerView({
     return sortedThemes.filter((t) => t.theme.toLowerCase().includes(q) || (t.sector ?? "").toLowerCase().includes(q));
   }, [sortedThemes, themeQuery]);
 
-  // Reset accordion state when switching modes or drill-down changes
   useEffect(() => {
-    setExpandedTheme(null);
-  }, [leaderboardMode, drilldownLabel]);
+    if (leaderboardMode !== "industry") setExpandedIndustryParents(new Set());
+  }, [leaderboardMode]);
+
+  useEffect(() => {
+    setExpandedIndustryParents(new Set());
+  }, [drilldownLabel]);
 
   useEffect(() => {
     setLeaderboardSubSpotlight(null);
@@ -2274,6 +2429,15 @@ const ScannerView = memo(function ScannerView({
 
   const toggleParent = useCallback((parent: string) => {
     setExpandedParents((prev) => {
+      const next = new Set(prev);
+      if (next.has(parent)) next.delete(parent);
+      else next.add(parent);
+      return next;
+    });
+  }, []);
+
+  const toggleIndustryParent = useCallback((parent: string) => {
+    setExpandedIndustryParents((prev) => {
       const next = new Set(prev);
       if (next.has(parent)) next.delete(parent);
       else next.add(parent);
@@ -2306,7 +2470,10 @@ const ScannerView = memo(function ScannerView({
 
   const { payload: finvizLeaderboardPayload, loading: finvizLbLoading, error: finvizLbError } = useFdvLeaderboard(leaderboardMode);
   const finvizRows = finvizLeaderboardPayload?.themes ?? [];
-  const rsPercentileMap = useMemo(() => normaliseRs(finvizLeaderboardPayload?.themes ?? []), [finvizLeaderboardPayload?.themes]);
+  const rsPercentileMap = useMemo(
+    () => normaliseRs(finvizLeaderboardPayload?.themes ?? []),
+    [leaderboardMode, finvizLeaderboardPayload?.themes]
+  );
   const finvizFilteredRows = useMemo(() => {
     let rows = finvizRows;
     // In industry mode, if a thematic drilldown is active, restrict to that bucket.
@@ -2319,104 +2486,10 @@ const ScannerView = memo(function ScannerView({
       t.theme.toLowerCase().includes(q) ||
       (t.sector ?? "").toLowerCase().includes(q) ||
       (t.thematicLabel ?? "").toLowerCase().includes(q) ||
-      getIndustryCategory(t).toLowerCase().includes(q)
+      getIndustryCategory(t as ThemeIndustryRow).toLowerCase().includes(q) ||
+      getIndustryParent(t.theme).toLowerCase().includes(q)
     );
   }, [finvizRows, themeQuery, leaderboardMode, drilldownLabel]);
-
-  // Group industries by category for accordion view
-  const groupedThemes = useMemo(() => {
-    if (leaderboardMode !== "industry") return [];
-    
-    const groups = new Map<string, ThemeIndustryRow[]>();
-    
-    finvizFilteredRows.forEach((row) => {
-      const category = getIndustryCategory(row);
-      if (!groups.has(category)) {
-        groups.set(category, []);
-      }
-      groups.get(category)!.push(row);
-    });
-
-    // Convert to array and sort each group's industries by the selected column
-    const result = Array.from(groups.entries()).map(([category, industries]) => {
-      const sortedIndustries = [...industries];
-      
-      // Sort sub-industries by the selected sort key
-      if (sortKey) {
-        const dir = sortDir === "asc" ? 1 : -1;
-        const num = (n: number | null | undefined) => (n == null || !Number.isFinite(n) ? Number.NEGATIVE_INFINITY : n);
-        
-        sortedIndustries.sort((a, b) => {
-          if (sortKey === "theme") return a.theme.localeCompare(b.theme) * dir;
-          if (sortKey === "perf1D") return (num(a.perf1D) - num(b.perf1D)) * dir;
-          if (sortKey === "perf1W") return (num(a.perf1W) - num(b.perf1W)) * dir;
-          if (sortKey === "perf1M") return (num(a.perf1M) - num(b.perf1M)) * dir;
-          if (sortKey === "perf3M") return (num(a.perf3M) - num(b.perf3M)) * dir;
-          if (sortKey === "perf6M") return (num(a.perf6M) - num(b.perf6M)) * dir;
-          if (sortKey === "rs1m") return (num(a.relativeStrength1M) - num(b.relativeStrength1M)) * dir;
-          return 0;
-        });
-      } else {
-        // Default sort by 1W performance (descending)
-        sortedIndustries.sort((a, b) => {
-          const perfA = a.perf1W ?? -Infinity;
-          const perfB = b.perf1W ?? -Infinity;
-          return perfB - perfA;
-        });
-      }
-
-      // Calculate aggregate performance for the parent row
-      const validIndustries = industries.filter(i => !i.seed);
-      const avgPerf1D = validIndustries.length > 0 ? validIndustries.reduce((sum, i) => sum + (i.perf1D ?? 0), 0) / validIndustries.length : null;
-      const avgPerf1W = validIndustries.length > 0 ? validIndustries.reduce((sum, i) => sum + (i.perf1W ?? 0), 0) / validIndustries.length : null;
-      const avgPerf1M = validIndustries.length > 0 ? validIndustries.reduce((sum, i) => sum + (i.perf1M ?? 0), 0) / validIndustries.length : null;
-      const avgPerf3M = validIndustries.length > 0 ? validIndustries.reduce((sum, i) => sum + (i.perf3M ?? 0), 0) / validIndustries.length : null;
-      const avgPerf6M = validIndustries.length > 0 ? validIndustries.reduce((sum, i) => sum + (i.perf6M ?? 0), 0) / validIndustries.length : null;
-      const avgRS = validIndustries.length > 0 ? validIndustries.reduce((sum, i) => sum + (i.relativeStrength1M ?? 0), 0) / validIndustries.length : null;
-
-      return {
-        category,
-        industries: sortedIndustries,
-        avgPerf1D,
-        avgPerf1W,
-        avgPerf1M,
-        avgPerf3M,
-        avgPerf6M,
-        avgRS,
-      };
-    });
-
-    // Sort groups by the selected sort key, or default to 1W performance
-    const sortByKey = sortKey || "perf1W";
-    const dir = sortDir === "asc" ? 1 : -1;
-    
-    result.sort((a, b) => {
-      const getValue = (group: typeof result[0]) => {
-        switch (sortByKey) {
-          case "theme": return group.category;
-          case "perf1D": return group.avgPerf1D ?? -Infinity;
-          case "perf1W": return group.avgPerf1W ?? -Infinity;
-          case "perf1M": return group.avgPerf1M ?? -Infinity;
-          case "perf3M": return group.avgPerf3M ?? -Infinity;
-          case "perf6M": return group.avgPerf6M ?? -Infinity;
-          case "rs1m": return group.avgRS ?? -Infinity;
-          default: return group.avgPerf1W ?? -Infinity;
-        }
-      };
-      
-      const valueA = getValue(a);
-      const valueB = getValue(b);
-      
-      if (typeof valueA === "string" && typeof valueB === "string") {
-        return valueA.localeCompare(valueB) * dir;
-      } else {
-        return (Number(valueB) - Number(valueA)) * dir;
-      }
-    });
-
-    // Never render accordion parents with zero children (avoids empty Uncategorized / Discretionary headers)
-    return result.filter((g) => g.industries.length > 0);
-  }, [finvizFilteredRows, leaderboardMode, sortKey, sortDir]);
   const sortedLeaderboardRows = useMemo(() => {
     if (!sortKey) return finvizFilteredRows;
     const dir = sortDir === "asc" ? 1 : -1;
@@ -2442,6 +2515,13 @@ const ScannerView = memo(function ScannerView({
     const groups = groupThemesByParent(sortedLeaderboardRows.slice(0, 160), rsPercentileMap);
     return [...groups].sort((a, b) => getParentLbSortValue(b, lbSortKey) - getParentLbSortValue(a, lbSortKey));
   }, [leaderboardMode, sortedLeaderboardRows, rsPercentileMap, lbSortKey]);
+
+  const industryLeaderboardGroups = useMemo(() => {
+    if (leaderboardMode !== "industry") return [];
+    const slice = finvizFilteredRows.slice(0, 160) as ThemeIndustryRow[];
+    const groups = groupIndustriesByParent(slice, rsPercentileMap);
+    return [...groups].sort((a, b) => getParentLbSortValue(b, lbSortKey) - getParentLbSortValue(a, lbSortKey));
+  }, [leaderboardMode, finvizFilteredRows, rsPercentileMap, lbSortKey]);
 
   const rsRows = useMemo(() => {
     return sortedThemes
@@ -2928,7 +3008,7 @@ const ScannerView = memo(function ScannerView({
               ) : (
                 <p className="truncate t-data text-slate-500">
                   {leaderboardMode === "industry"
-                    ? "Click industry groups to expand/collapse sub-industries"
+                    ? "Click a parent sector to expand Finviz industries (RS = percentile vs industry universe)"
                     : "Theme performance + RS"}
                 </p>
               )}
@@ -2941,7 +3021,6 @@ const ScannerView = memo(function ScannerView({
                   onClick={() => {
                     setLeaderboardMode("themes");
                     setDrilldownLabel(null);
-                    setExpandedTheme(null);
                     setLeaderboardSubSpotlight(null);
                   }}
                   className={`rounded-full px-3 py-1.5 t-data font-semibold transition-colors ${
@@ -2956,7 +3035,6 @@ const ScannerView = memo(function ScannerView({
                   onClick={() => {
                     setLeaderboardMode("industry");
                     setDrilldownLabel(null);
-                    setExpandedTheme(null);
                     setLeaderboardSubSpotlight(null);
                   }}
                   className={`rounded-full px-3 py-1.5 t-data font-semibold transition-colors ${
@@ -2966,7 +3044,7 @@ const ScannerView = memo(function ScannerView({
                   Industry
                 </button>
               </div>
-              {leaderboardMode === "themes" ? (
+              {leaderboardMode === "themes" || leaderboardMode === "industry" ? (
                 <select
                   value={lbSortKey}
                   onChange={(e) => setLbSortKey(e.target.value as LbSortKey)}
@@ -2985,7 +3063,7 @@ const ScannerView = memo(function ScannerView({
                 <input
                   value={themeQuery}
                   onChange={(e) => setThemeQuery(e.target.value)}
-                  placeholder="Filter themes…"
+                  placeholder={leaderboardMode === "industry" ? "Filter industries…" : "Filter themes…"}
                   className="w-[200px] bg-transparent text-xs text-slate-200 placeholder:text-slate-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-terminal-card"
                 />
               </div>
@@ -3009,7 +3087,7 @@ const ScannerView = memo(function ScannerView({
               </caption>
               <thead>
                 <tr>
-                  {leaderboardMode === "themes" ? (
+                  {leaderboardMode === "themes" || leaderboardMode === "industry" ? (
                     <>
                       <th
                         scope="col"
@@ -3034,7 +3112,7 @@ const ScannerView = memo(function ScannerView({
                           }}
                           className="inline-flex items-center gap-1 hover:text-slate-300"
                         >
-                          <span>Theme</span>
+                          <span>{leaderboardMode === "industry" ? "Industry" : "Theme"}</span>
                           <span className={`t-micro ${sortKey === "theme" ? "text-accent" : "text-slate-600"}`}>
                             {sortKey === "theme" ? (sortDir === "asc" ? "▲" : "▼") : "↕"}
                           </span>
@@ -3094,95 +3172,7 @@ const ScannerView = memo(function ScannerView({
                         </button>
                       </th>
                     </>
-                  ) : (
-                    <>
-                      {(
-                        [
-                          { label: "#", key: null as null | "theme" | "perf1D" | "perf1W" | "perf1M" | "perf3M" | "perf6M" | "rs1m", thClass: "w-8 text-right" },
-                          { label: "Theme", key: "theme" as const, thClass: "min-w-[200px] w-[280px]" },
-                          { label: "1D", key: "perf1D" as const, thClass: "w-[70px] text-right" },
-                          { label: "1W", key: "perf1W" as const, thClass: "w-[70px] text-right" },
-                          { label: "1M", key: "perf1M" as const, thClass: "w-[70px] text-right" },
-                          { label: "3M", key: "perf3M" as const, thClass: "w-[80px] text-right" },
-                          { label: "6M", key: "perf6M" as const, thClass: "w-[80px] text-right" },
-                        ] as const
-                      ).map((h) => (
-                        <th
-                          key={h.label}
-                          scope="col"
-                          className={`sticky top-0 z-10 border-b border-terminal-border bg-terminal-card px-2 py-2 t-label whitespace-nowrap ${h.thClass}`}
-                        >
-                          {h.key ? (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                if (sortKey === h.key) {
-                                  setSortDir((d) => (d === "asc" ? "desc" : "asc"));
-                                } else {
-                                  setSortKey(h.key);
-                                  setSortDir(h.key === "theme" ? "asc" : "desc");
-                                }
-                              }}
-                              className="inline-flex items-center gap-1 hover:text-slate-300"
-                            >
-                              <span>{h.label}</span>
-                              <span className={`t-micro ${sortKey === h.key ? "text-accent" : "text-slate-600"}`}>
-                                {sortKey === h.key ? (sortDir === "asc" ? "▲" : "▼") : "↕"}
-                              </span>
-                            </button>
-                          ) : (
-                            h.label
-                          )}
-                        </th>
-                      ))}
-                      <th
-                        scope="col"
-                        className="sticky top-0 z-10 w-[90px] border-b border-terminal-border bg-terminal-card px-2 py-2 text-right t-label whitespace-nowrap"
-                      >
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const key = "rs1m" as const;
-                            if (sortKey === key) {
-                              setSortDir((d) => (d === "asc" ? "desc" : "asc"));
-                            } else {
-                              setSortKey(key);
-                              setSortDir("desc");
-                            }
-                          }}
-                          className="inline-flex items-center gap-1 hover:text-slate-300"
-                        >
-                          <span>RS 1M</span>
-                          <span className={`t-micro ${sortKey === "rs1m" ? "text-accent" : "text-slate-600"}`}>
-                            {sortKey === "rs1m" ? (sortDir === "asc" ? "▲" : "▼") : "↕"}
-                          </span>
-                        </button>
-                      </th>
-                      <th
-                        scope="col"
-                        className="sticky top-0 z-10 w-[120px] border-b border-terminal-border bg-terminal-card px-2 py-2 t-label whitespace-nowrap"
-                      >
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const key = "leaders" as const;
-                            if (sortKey === key) {
-                              setSortDir((d) => (d === "asc" ? "desc" : "asc"));
-                            } else {
-                              setSortKey(key);
-                              setSortDir("asc");
-                            }
-                          }}
-                          className="inline-flex items-center gap-1 hover:text-slate-300"
-                        >
-                          <span>Leaders</span>
-                          <span className={`t-micro ${sortKey === "leaders" ? "text-accent" : "text-slate-600"}`}>
-                            {sortKey === "leaders" ? (sortDir === "asc" ? "▲" : "▼") : "↕"}
-                          </span>
-                        </button>
-                      </th>
-                    </>
-                  )}
+                  ) : null}
                 </tr>
               </thead>
               <tbody>
@@ -3212,122 +3202,178 @@ const ScannerView = memo(function ScannerView({
                     </td>
                   </tr>
                 ) : leaderboardMode === "industry" ? (
-                  // Accordion-style industry grouping
-                  groupedThemes.map((group, groupIdx) => {
-                    const isOpen = expandedTheme === group.category;
-                    
-                    return (
-                      <React.Fragment key={`group-${group.category}`}>
-                        {/* Parent Category Row */}
-                        <tr
-                          className="cursor-pointer border-b border-terminal-border/60 bg-terminal-elevated/20 hover:bg-terminal-elevated/40"
-                          onClick={() => setExpandedTheme(isOpen ? null : group.category)}
-                        >
-                          <td className="whitespace-nowrap px-2 py-3 text-right font-mono tabular-nums text-slate-500">
-                            {groupIdx + 1}
-                          </td>
-                          <td className="min-w-0 max-w-[280px] px-2 py-3">
-                            <div className="flex items-center gap-2">
-                              <span className={isOpen ? "rotate-90" : ""} style={{ transition: "transform 0.2s" }}>▶</span>
-                              <div className="min-w-0">
-                                <p className="truncate font-bold text-slate-100">{group.category}</p>
-                                <p className="truncate t-micro text-slate-500">{group.industries.length} industries</p>
-                              </div>
-                            </div>
-                          </td>
-                          {/* Performance columns - show averages */}
-                          {[group.avgPerf1D, group.avgPerf1W, group.avgPerf1M, group.avgPerf3M, group.avgPerf6M].map((v, i) => (
-                            <td
-                              key={i}
-                              className={`whitespace-nowrap px-2 py-3 text-right font-mono tabular-nums font-bold ${
-                                v == null || !Number.isFinite(v) ? "text-slate-600" : pctClass(v)
-                              }`}
-                            >
-                              {fmtPct(v, 1)}
+                  industryLeaderboardGroups.map(
+                    (
+                      { parent, rows, totalStockCount, avgRs, avgPerf1D, avgPerf1W, avgPerf1M, avgPerf3M, avgPerf6M },
+                      idx
+                    ) => {
+                      const isOpen = expandedIndustryParents.has(parent);
+                      const hasParentRsPct = rows.some((r) => {
+                        const p = rsPercentileMap.get(r.theme);
+                        return p != null && Number.isFinite(p);
+                      });
+                      const sortedChildren = [...rows].sort((a, b) => {
+                        const val = (row: ThemeIndustryRow): number => {
+                          if (lbSortKey === "rs") return rsPercentileMap.get(row.theme) ?? -1;
+                          if (lbSortKey === "1d") return row.perf1D ?? -Infinity;
+                          if (lbSortKey === "1w") return row.perf1W ?? -Infinity;
+                          if (lbSortKey === "1m") return row.perf1M ?? -Infinity;
+                          if (lbSortKey === "3m") return row.perf3M ?? -Infinity;
+                          if (lbSortKey === "6m") return row.perf6M ?? -Infinity;
+                          return -1;
+                        };
+                        return val(b) - val(a);
+                      });
+                      return (
+                        <Fragment key={parent}>
+                          <tr
+                            className={`cursor-pointer select-none border-b border-terminal-border/60 bg-terminal-elevated/20 transition-colors duration-100 hover:bg-terminal-elevated/40 ${
+                              isOpen ? "bg-terminal-elevated/30" : ""
+                            }`}
+                            onClick={() => toggleIndustryParent(parent)}
+                            role="button"
+                            aria-expanded={isOpen}
+                          >
+                            <td className="whitespace-nowrap px-2 py-2.5 text-right font-mono tabular-nums text-slate-600">
+                              {idx + 1}
                             </td>
-                          ))}
-                          <td className="whitespace-nowrap px-2 py-3 text-right font-mono tabular-nums font-bold text-slate-300">
-                            {group.avgRS == null || !Number.isFinite(group.avgRS) ? "—" : group.avgRS.toFixed(1)}
-                          </td>
-                          <td className="max-w-[120px] whitespace-nowrap px-2 py-3 text-right font-mono text-slate-600">—</td>
-                        </tr>
-                        
-                        {/* Sub-Industries (when expanded) */}
-                        {isOpen && group.industries.map((industry, idx) => {
-                          const rs = industry.relativeStrength1M ?? null;
-                          const adr = getIndustryAdr(industry);
-                          
-                          const subSelected =
-                            leaderboardSubSpotlight?.kind === "industry" &&
-                            leaderboardSubSpotlight.theme === industry.theme &&
-                            leaderboardSubSpotlight.parent === group.category;
-                          return (
-                            <tr
-                              key={`industry-${industry.theme}`}
-                              className={`cursor-pointer border-b border-terminal-border/60 hover:bg-terminal-elevated/40 ${
-                                subSelected ? "bg-accent/15 ring-1 ring-inset ring-accent/35" : ""
-                              }`}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setSpotlightThemeName(industry.theme);
-                                setLeaderboardSubSpotlight({
-                                  kind: "industry",
-                                  parent: group.category,
-                                  theme: industry.theme,
-                                  relativeStrength1M: industry.relativeStrength1M,
-                                  perf1D: industry.perf1D ?? null,
-                                  perf1M: industry.perf1M ?? null,
-                                  perfYTD: industry.perfYTD ?? null,
-                                  totalCount: industry.totalCount ?? 0,
-                                  leaders: industry.leaders ?? [],
-                                });
-                              }}
-                            >
-                              <td className="whitespace-nowrap px-2 py-2 text-right font-mono tabular-nums text-slate-600">
-                                {groupIdx + 1}.{idx + 1}
-                              </td>
-                              <td className="min-w-0 max-w-[280px] px-2 py-2 pl-6">
-                                <div className="min-w-0 border-l border-slate-700 pl-3">
-                                  <p
-                                    className={`max-w-[260px] truncate font-medium ${industry.seed ? "text-slate-500 italic" : "text-slate-200"}`}
-                                  >
-                                    {industry.theme}
-                                    {industry.seed && (
-                                      <span className="ml-1.5 rounded bg-terminal-elevated/60 px-1 py-px t-mono not-italic text-slate-600">
-                                        awaiting data
-                                      </span>
-                                    )}
-                                  </p>
-                                  <p className="truncate t-micro">
-                                    <span className={industry.perf1W != null ? pctClass(industry.perf1W) : "text-slate-600"}>
-                                      {fmtPct(industry.perf1W, 2)}
-                                    </span>
-                                    {adr != null && ` (${adr.toFixed(1)}%)`}
+                            <td className="min-w-0 max-w-[280px] px-2 py-2.5">
+                              <div className="flex min-w-0 items-center gap-2">
+                                <ChevronRight
+                                  size={11}
+                                  className={`shrink-0 text-slate-500 transition-transform duration-200 ${
+                                    isOpen ? "rotate-90 text-cyan-400" : ""
+                                  }`}
+                                  aria-hidden
+                                />
+                                <div className="min-w-0">
+                                  <p className="max-w-[260px] truncate text-[12px] font-semibold text-slate-200">{parent}</p>
+                                  <p className="truncate t-micro text-slate-600">
+                                    {rows.length} industries · {totalStockCount} stocks
                                   </p>
                                 </div>
+                              </div>
+                            </td>
+                            {[avgPerf1D, avgPerf1W, avgPerf1M, avgPerf3M, avgPerf6M].map((v, i) => (
+                              <td
+                                key={i}
+                                className={`whitespace-nowrap px-2 py-2.5 text-right font-mono tabular-nums font-bold ${
+                                  v == null || !Number.isFinite(v) ? "text-slate-600" : pctClass(v)
+                                }`}
+                              >
+                                {fmtPct(v, 2)}
                               </td>
-                              {[industry.perf1D, industry.perf1W, industry.perf1M, industry.perf3M, industry.perf6M].map((v, i) => (
-                                <td
-                                  key={i}
-                                  className={`whitespace-nowrap px-2 py-2 text-right font-mono tabular-nums ${
-                                    v == null || !Number.isFinite(v) ? "text-slate-600" : pctClass(v)
+                            ))}
+                            <td className="whitespace-nowrap px-2 py-2.5 text-right">
+                              <div className="flex items-center justify-end gap-1.5">
+                                <div className="h-1 w-6 overflow-hidden rounded-full bg-terminal-elevated/50">
+                                  <div
+                                    className="h-full rounded-full"
+                                    style={{
+                                      width: `${Math.min(100, Math.max(0, hasParentRsPct ? avgRs : 0))}%`,
+                                      background: rsBarColor(hasParentRsPct ? avgRs : null),
+                                    }}
+                                  />
+                                </div>
+                                <span className={`t-mono text-[11px] font-bold tabular-nums ${rsTextClass(hasParentRsPct ? avgRs : null)}`}>
+                                  {hasParentRsPct ? avgRs.toFixed(0) : "—"}
+                                </span>
+                              </div>
+                            </td>
+                            <td className="max-w-[120px] truncate whitespace-nowrap px-2 py-2.5 text-right font-mono text-slate-600">
+                              —
+                            </td>
+                          </tr>
+
+                          {isOpen &&
+                            sortedChildren.map((industry, cidx) => {
+                              const rsPct = rsPercentileMap.get(industry.theme) ?? null;
+                              const adr = getIndustryAdr(industry);
+                              const subSelected =
+                                leaderboardSubSpotlight?.kind === "industry" &&
+                                leaderboardSubSpotlight.theme === industry.theme &&
+                                leaderboardSubSpotlight.parent === parent;
+                              return (
+                                <tr
+                                  key={`industry:${industry.theme}`}
+                                  className={`cursor-pointer border-b border-terminal-border/60 bg-terminal-bg/50 transition-colors duration-100 hover:bg-terminal-elevated/40 ${
+                                    subSelected ? "bg-accent/15 ring-1 ring-inset ring-accent/35" : ""
                                   }`}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setSpotlightThemeName(industry.theme);
+                                    setLeaderboardSubSpotlight({
+                                      kind: "industry",
+                                      parent,
+                                      theme: industry.theme,
+                                      relativeStrength1M: industry.relativeStrength1M,
+                                      perf1D: industry.perf1D ?? null,
+                                      perf1M: industry.perf1M ?? null,
+                                      perfYTD: industry.perfYTD ?? null,
+                                      totalCount: industry.totalCount ?? 0,
+                                      leaders: industry.leaders ?? [],
+                                    });
+                                  }}
                                 >
-                                  {fmtPct(v, 2)}
-                                </td>
-                              ))}
-                              <td className="whitespace-nowrap px-2 py-2 text-right font-mono tabular-nums text-slate-300">
-                                {rs == null || !Number.isFinite(rs) ? "—" : rs.toFixed(1)}
-                              </td>
-                              <td className="max-w-[120px] truncate whitespace-nowrap px-2 py-2 text-right font-mono text-slate-400">
-                                {(industry.leaders ?? []).slice(0, 4).join(", ") || "—"}
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </React.Fragment>
-                    );
-                  })
+                                  <td className="whitespace-nowrap px-2 py-2 text-right font-mono tabular-nums text-slate-600">
+                                    {cidx + 1}
+                                  </td>
+                                  <td className="min-w-0 max-w-[280px] px-2 py-2 pl-6">
+                                    <div className="min-w-0 border-l border-slate-700 pl-3">
+                                      <p
+                                        className={`max-w-[260px] truncate font-medium ${industry.seed ? "italic text-slate-500" : "text-slate-100"}`}
+                                      >
+                                        {industry.theme}
+                                        {industry.seed && (
+                                          <span className="ml-1.5 rounded bg-terminal-elevated/60 px-1 py-px t-mono not-italic text-slate-600">
+                                            awaiting data
+                                          </span>
+                                        )}
+                                      </p>
+                                      <p className="truncate t-micro">
+                                        <span className={industry.perf1W != null ? pctClass(industry.perf1W) : "text-slate-600"}>
+                                          {fmtPct(industry.perf1W, 2)}
+                                        </span>
+                                        {adr != null && ` (${adr.toFixed(1)}%)`}
+                                      </p>
+                                    </div>
+                                  </td>
+                                  {[industry.perf1D, industry.perf1W, industry.perf1M, industry.perf3M, industry.perf6M].map((v, i) => (
+                                    <td
+                                      key={i}
+                                      className={`whitespace-nowrap px-2 py-2 text-right font-mono tabular-nums ${
+                                        v == null || !Number.isFinite(v) ? "text-slate-600" : pctClass(v)
+                                      }`}
+                                    >
+                                      {fmtPct(v, 2)}
+                                    </td>
+                                  ))}
+                                  <td className="whitespace-nowrap px-2 py-2 text-right">
+                                    <div className="flex items-center justify-end gap-1.5">
+                                      <div className="h-1 w-5 overflow-hidden rounded-full bg-terminal-elevated/50">
+                                        <div
+                                          className="h-full rounded-full"
+                                          style={{
+                                            width: `${Math.min(100, Math.max(0, rsPct ?? 0))}%`,
+                                            background: rsBarColor(rsPct),
+                                          }}
+                                        />
+                                      </div>
+                                      <span className={`t-mono text-[11px] font-bold tabular-nums ${rsTextClass(rsPct)}`}>
+                                        {rsPct != null && Number.isFinite(rsPct) ? rsPct.toFixed(0) : "—"}
+                                      </span>
+                                    </div>
+                                  </td>
+                                  <td className="max-w-[120px] truncate whitespace-nowrap px-2 py-2 text-right font-mono text-slate-300">
+                                    {(industry.leaders ?? []).slice(0, 4).join(", ") || "—"}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                        </Fragment>
+                      );
+                    }
+                  )
                 ) : (
                   // Themes mode — parent groups + child rows (Industry mode unchanged above)
                   themesLeaderboardGroups.map(
