@@ -3,7 +3,9 @@ import { AlertTriangle, BarChart2, BarChart3, Info, LayoutGrid, ListPlus, Moon, 
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import MarketBreadth from "./MarketBreadth";
 import { useWatchlist } from "../hooks/useWatchlist";
+import { useSkyteRsIndustries } from "../hooks/useSkyteRsIndustries";
 import { API_BASE_URL } from "../lib/apiBase";
+import { lookupSkyteIndustry } from "../lib/skyteRs";
 import { formatMoney, fmtPct, fmtPrice, pctClass } from "../lib/formatters";
 import { RotationView } from "./RotationView";
 import { WatchlistDrawer } from "./WatchlistDrawer";
@@ -1845,6 +1847,8 @@ const ScannerView = memo(function ScannerView({
   onSelectTicker: (ticker: string, meta?: TickerDrawerMeta) => void;
 }) {
   const [leaderboardMode, setLeaderboardMode] = useState<"themes" | "industry">("themes");
+  const skyteRsEnabled = leaderboardMode === "industry";
+  const { lookupMap: skyteIndustryMap, loading: skyteRsLoading } = useSkyteRsIndustries(skyteRsEnabled);
   // drilldownLabel: when set (industry mode only), filter rows to this thematic bucket.
   const [drilldownLabel, setDrilldownLabel] = useState<string | null>(null);
   // expandedTheme: for accordion-style industry grouping
@@ -2515,6 +2519,7 @@ const ScannerView = memo(function ScannerView({
                     { label: "3M", key: "perf3M" as const },
                     { label: "6M", key: "perf6M" as const },
                     { label: "RS 1M", key: "rs1m" as const },
+                    { label: "Log %", key: null },
                     { label: "Qual%", key: "qual" as const },
                     { label: "Leaders", key: "leaders" as const },
                   ].map((h) => (
@@ -2547,13 +2552,13 @@ const ScannerView = memo(function ScannerView({
               <tbody>
                 {finvizLbLoading && !finvizFilteredRows.length ? (
                   <tr>
-                    <td colSpan={10}>
+                    <td colSpan={11}>
                       <SkeletonRows count={8} />
                     </td>
                   </tr>
                 ) : finvizLbError && !finvizFilteredRows.length ? (
                   <tr>
-                    <td colSpan={10} className="px-3 py-4">
+                    <td colSpan={11} className="px-3 py-4">
                       <ErrorBanner
                         title={`Failed to load ${leaderboardMode} data`}
                         detail={finvizLbError}
@@ -2562,7 +2567,7 @@ const ScannerView = memo(function ScannerView({
                   </tr>
                 ) : !finvizLbLoading && sortedLeaderboardRows.length === 0 ? (
                   <tr>
-                    <td colSpan={10}>
+                    <td colSpan={11}>
                       <EmptyState
                         icon={LayoutGrid}
                         title={`No ${leaderboardMode} data yet`}
@@ -2607,6 +2612,9 @@ const ScannerView = memo(function ScannerView({
                           ))}
                           <td className="px-3 py-3 text-right font-mono tabular-nums font-bold text-slate-300">
                             {group.avgRS == null || !Number.isFinite(group.avgRS) ? "—" : group.avgRS.toFixed(1)}
+                          </td>
+                          <td className="px-3 py-3 text-right font-mono tabular-nums font-bold text-slate-600" title="Category rollup — open a sub-industry row for skyte/rs-log match">
+                            —
                           </td>
                           <td className="px-3 py-3 text-right font-mono tabular-nums font-bold text-slate-300">
                             {group.avgQual == null ? "—" : `${(group.avgQual * 100).toFixed(0)}%`}
@@ -2679,6 +2687,19 @@ const ScannerView = memo(function ScannerView({
                               ))}
                               <td className="px-3 py-2 text-right font-mono tabular-nums text-slate-300">
                                 {rs == null || !Number.isFinite(rs) ? "—" : rs.toFixed(1)}
+                              </td>
+                              <td
+                                className="px-3 py-2 text-right font-mono tabular-nums text-slate-300"
+                                title={(() => {
+                                  if (!skyteRsEnabled || skyteRsLoading) return undefined;
+                                  const sk = lookupSkyteIndustry(skyteIndustryMap, industry.theme);
+                                  return sk ? `skyte/rs-log • RS ${sk.relative_strength.toFixed(1)}` : "No skyte row for this label (name mismatch)";
+                                })()}
+                              >
+                                {!skyteRsEnabled ? "—" : skyteRsLoading ? "…" : (() => {
+                                  const sk = lookupSkyteIndustry(skyteIndustryMap, industry.theme);
+                                  return sk ? String(sk.percentile) : "—";
+                                })()}
                               </td>
                               <td className="px-3 py-2 text-right font-mono tabular-nums text-slate-300">
                                 {qRatio == null ? "—" : `${(qRatio * 100).toFixed(0)}%`}
@@ -2756,6 +2777,9 @@ const ScannerView = memo(function ScannerView({
                           ))}
                           <td className="px-3 py-2 text-right font-mono tabular-nums text-slate-200">
                             {rs == null || !Number.isFinite(rs) ? "—" : rs.toFixed(1)}
+                          </td>
+                          <td className="px-3 py-2 text-right font-mono tabular-nums text-slate-600" title="Switch to Industry leaderboard for skyte/rs-log percentile column">
+                            —
                           </td>
                           <td className="px-3 py-2 text-right font-mono tabular-nums text-slate-200">
                             {qRatio == null ? "—" : `${(qRatio * 100).toFixed(0)}%`}

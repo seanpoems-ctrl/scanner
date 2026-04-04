@@ -13,6 +13,7 @@ from fastapi import FastAPI, HTTPException, Query as FQuery, Header
 from fastapi.middleware.cors import CORSMiddleware
 
 from routers.rotation import router as _rotation_router
+from routers.rs_skyte import router as _rs_skyte_router
 from routers.watchlist import router as _watchlist_router
 
 from time import monotonic
@@ -271,6 +272,7 @@ def _on_upstream_ok(now: float) -> None:
 
 app = FastAPI(title="POWER-THEME API", version="0.1.0")
 app.include_router(_rotation_router)
+app.include_router(_rs_skyte_router)
 app.include_router(_watchlist_router)
 
 
