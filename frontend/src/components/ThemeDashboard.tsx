@@ -207,7 +207,24 @@ function getParentCategory(themeName: string): string {
   return THEME_PARENT_MAP[themeName] ?? finvizThemeLedgerParent(themeName);
 }
 
-function groupThemesByParent(themes: ApiTheme[]): { parent: string; rows: ApiTheme[]; avgRs: number }[] {
+function avgFiniteField(rows: ApiTheme[], pick: (r: ApiTheme) => number | null | undefined): number | null {
+  const vals = rows.map(pick).filter((x): x is number => x != null && Number.isFinite(x));
+  return vals.length ? vals.reduce((s, v) => s + v, 0) / vals.length : null;
+}
+
+type ThemeParentGroup = {
+  parent: string;
+  rows: ApiTheme[];
+  avgRs: number;
+  avgPerf1D: number | null;
+  avgPerf1W: number | null;
+  avgPerf1M: number | null;
+  avgPerf3M: number | null;
+  avgPerf6M: number | null;
+  sortScore: number;
+};
+
+function groupThemesByParent(themes: ApiTheme[]): ThemeParentGroup[] {
   const map = new Map<string, ApiTheme[]>();
   for (const t of themes) {
     const p = getParentCategory(t.theme);
@@ -216,11 +233,27 @@ function groupThemesByParent(themes: ApiTheme[]): { parent: string; rows: ApiThe
   }
   return [...map.entries()]
     .map(([parent, rows]) => {
-      const vals = rows.map((r) => r.relativeStrength1M ?? 0).filter(Number.isFinite);
-      const avgRs = vals.length ? vals.reduce((s, v) => s + v, 0) / vals.length : 0;
-      return { parent, rows, avgRs };
+      const rsVals = rows.map((r) => r.relativeStrength1M).filter((x): x is number => x != null && Number.isFinite(x));
+      const avgRs = rsVals.length ? rsVals.reduce((s, v) => s + v, 0) / rsVals.length : 0;
+      const avgPerf1D = avgFiniteField(rows, (r) => r.perf1D);
+      const avgPerf1W = avgFiniteField(rows, (r) => r.perf1W);
+      const avgPerf1M = avgFiniteField(rows, (r) => r.perf1M);
+      const avgPerf3M = avgFiniteField(rows, (r) => r.perf3M);
+      const avgPerf6M = avgFiniteField(rows, (r) => r.perf6M);
+      const sortScore = rsVals.length > 0 ? avgRs : (avgPerf1M ?? Number.NEGATIVE_INFINITY);
+      return {
+        parent,
+        rows,
+        avgRs,
+        avgPerf1D,
+        avgPerf1W,
+        avgPerf1M,
+        avgPerf3M,
+        avgPerf6M,
+        sortScore,
+      };
     })
-    .sort((a, b) => b.avgRs - a.avgRs);
+    .sort((a, b) => b.sortScore - a.sortScore);
 }
 
 function rsTextClass(rs: number | null | undefined): string {
@@ -720,13 +753,16 @@ const SpotlightDrawer = memo(function SpotlightDrawer({
 
   const rs = theme?.relativeStrength1M ?? null;
 
+  /** Below app header + workspace tabs (WatchlistDrawer is in-flow; this matches that chrome height). */
+  const drawerTop = "var(--theme-spotlight-drawer-top, 7.75rem)";
+
   return (
     <>
       <div
-        className={`fixed inset-0 z-30 transition-opacity duration-200 ${
+        className={`fixed right-0 bottom-0 left-0 z-30 transition-opacity duration-200 ${
           isOpen ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0"
         }`}
-        style={{ background: "rgba(0,0,0,0.45)" }}
+        style={{ top: drawerTop, background: "rgba(0,0,0,0.45)" }}
         onClick={onClose}
         aria-hidden
       />
@@ -736,7 +772,8 @@ const SpotlightDrawer = memo(function SpotlightDrawer({
         aria-modal="true"
         aria-label="Theme spotlight drawer"
         aria-hidden={!isOpen}
-        className={`fixed bottom-0 right-0 top-0 z-40 flex w-80 flex-col border-l border-terminal-border bg-terminal-card shadow-2xl transition-transform duration-200 ${
+        style={{ top: drawerTop }}
+        className={`fixed right-0 bottom-0 z-40 flex w-80 flex-col border-l border-terminal-border bg-terminal-card shadow-2xl transition-transform duration-200 ${
           isOpen ? "translate-x-0" : "translate-x-full"
         }`}
       >
@@ -2208,28 +2245,29 @@ const ScannerView = memo(function ScannerView({
 
   const activateThemeLeaderboardRow = useCallback(
     (row: ApiTheme) => {
-      const sk = lookupSkyteIndustry(skyteIndustryMap, row.theme);
-      setLbThemeDrawer(row);
+      const fullRow = themes.find((t) => t.theme === row.theme) ?? row;
+      const sk = lookupSkyteIndustry(skyteIndustryMap, fullRow.theme);
+      setLbThemeDrawer(fullRow);
       setLbThemeDrawerSkyteRs(sk?.relative_strength ?? null);
-      setSpotlightThemeName(row.theme);
-      const finvizSlug = (row.finvizThemeSlug ?? "").trim();
+      setSpotlightThemeName(fullRow.theme);
+      const finvizSlug = (fullRow.finvizThemeSlug ?? "").trim();
       if (finvizSlug) {
         setLeaderboardSubSpotlight({
           kind: "finviz_theme",
-          theme: row.theme,
+          theme: fullRow.theme,
           finvizThemeSlug: finvizSlug,
-          relativeStrength1M: row.relativeStrength1M,
-          perf1D: row.perf1D ?? null,
-          perf1M: row.perf1M ?? null,
-          perfYTD: row.perfYTD ?? null,
-          totalCount: row.totalCount ?? 0,
-          leaders: row.leaders ?? [],
+          relativeStrength1M: fullRow.relativeStrength1M,
+          perf1D: fullRow.perf1D ?? null,
+          perf1M: fullRow.perf1M ?? null,
+          perfYTD: fullRow.perfYTD ?? null,
+          totalCount: fullRow.totalCount ?? 0,
+          leaders: fullRow.leaders ?? [],
         });
       } else {
         setLeaderboardSubSpotlight(null);
       }
     },
-    [skyteIndustryMap, setSpotlightThemeName]
+    [skyteIndustryMap, setSpotlightThemeName, themes]
   );
 
   const { payload: finvizLeaderboardPayload, loading: finvizLbLoading, error: finvizLbError } = useFdvLeaderboard(leaderboardMode);
@@ -3068,11 +3106,24 @@ const ScannerView = memo(function ScannerView({
                   })
                 ) : (
                   // Themes mode — parent groups + child rows (Industry mode unchanged above)
-                  themesLeaderboardGroups.map(({ parent, rows, avgRs }) => {
+                  themesLeaderboardGroups.map(
+                    (
+                      { parent, rows, avgRs, avgPerf1D, avgPerf1W, avgPerf1M, avgPerf3M, avgPerf6M },
+                      idx
+                    ) => {
                     const isOpen = expandedParents.has(parent);
-                    const sortedChildren = [...rows].sort(
-                      (a, b) => (b.relativeStrength1M ?? 0) - (a.relativeStrength1M ?? 0)
-                    );
+                    const rsVals = rows.map((r) => r.relativeStrength1M).filter((x): x is number => x != null && Number.isFinite(x));
+                    const hasRsAverage = rsVals.length > 0;
+                    const sortedChildren = [...rows].sort((a, b) => {
+                      const ar = a.relativeStrength1M;
+                      const br = b.relativeStrength1M;
+                      const aOk = ar != null && Number.isFinite(ar);
+                      const bOk = br != null && Number.isFinite(br);
+                      if (aOk && bOk) return br - ar;
+                      if (aOk) return -1;
+                      if (bOk) return 1;
+                      return (b.perf1M ?? Number.NEGATIVE_INFINITY) - (a.perf1M ?? Number.NEGATIVE_INFINITY);
+                    });
                     return (
                       <Fragment key={parent}>
                         <tr
@@ -3083,7 +3134,7 @@ const ScannerView = memo(function ScannerView({
                           role="button"
                           aria-expanded={isOpen}
                         >
-                          <td className="px-3 py-2.5 text-right font-mono tabular-nums text-slate-600">—</td>
+                          <td className="px-3 py-2.5 text-right font-mono tabular-nums text-slate-600">{idx + 1}</td>
                           <td className="px-3 py-2.5">
                             <div className="flex min-w-0 items-center gap-2">
                               <ChevronRight
@@ -3099,11 +3150,16 @@ const ScannerView = memo(function ScannerView({
                               </div>
                             </div>
                           </td>
-                          <td className="px-3 py-2.5" />
-                          <td className="px-3 py-2.5" />
-                          <td className="px-3 py-2.5" />
-                          <td className="px-3 py-2.5" />
-                          <td className="px-3 py-2.5" />
+                          {[avgPerf1D, avgPerf1W, avgPerf1M, avgPerf3M, avgPerf6M].map((v, i) => (
+                            <td
+                              key={i}
+                              className={`px-3 py-2.5 text-right font-mono tabular-nums font-bold ${
+                                v == null || !Number.isFinite(v) ? "text-slate-600" : pctClass(v)
+                              }`}
+                            >
+                              {fmtPct(v, 2)}
+                            </td>
+                          ))}
                           <td className="px-3 py-2.5 text-right">
                             <div className="flex items-center justify-end gap-1.5">
                               <div className="h-1 w-6 overflow-hidden rounded-full bg-terminal-elevated/50">
@@ -3115,8 +3171,8 @@ const ScannerView = memo(function ScannerView({
                                   }}
                                 />
                               </div>
-                              <span className={`t-mono text-[11px] font-bold tabular-nums ${rsTextClass(avgRs)}`}>
-                                {avgRs > 0 ? avgRs.toFixed(0) : "—"}
+                              <span className={`t-mono text-[11px] font-bold tabular-nums ${rsTextClass(hasRsAverage ? avgRs : null)}`}>
+                                {hasRsAverage ? avgRs.toFixed(0) : "—"}
                               </span>
                             </div>
                           </td>
