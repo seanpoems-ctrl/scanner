@@ -2742,7 +2742,7 @@ const ScannerView = memo(function ScannerView({
     : null;
 
   return (
-    <div className="flex w-full min-w-0 flex-1 flex-row gap-3">
+    <div className="flex w-full min-w-0 flex-1 flex-row gap-0">
       {/* Left: Market + Brief + VIX */}
       <div className="flex w-[360px] min-w-[360px] shrink-0 flex-col gap-3 pr-1">
         <MarketRegimeCard state={payload.market_momentum_score?.state} message={payload.market_momentum_score?.message} />
@@ -3240,18 +3240,18 @@ const ScannerView = memo(function ScannerView({
                 Leaderboard of themes or industries with performance and relative strength columns.
               </caption>
               <thead>
-                <tr className="sticky top-0 z-10 bg-terminal-bg">
+                <tr className="sticky top-[104px] z-10 bg-terminal-bg">
                   {leaderboardMode === "themes" || leaderboardMode === "industry" ? (
                     <>
                       <th
                         scope="col"
-                        className="sticky top-0 z-10 w-8 border-b border-terminal-border bg-terminal-bg px-2 py-2 text-right t-label whitespace-nowrap overflow-hidden"
+                        className="sticky top-[104px] z-10 w-8 border-b border-terminal-border bg-terminal-bg px-2 py-2 text-right t-label whitespace-nowrap overflow-hidden"
                       >
                         #
                       </th>
                       <th
                         scope="col"
-                        className="sticky top-0 z-10 border-b border-terminal-border bg-terminal-bg px-2 py-2 t-label whitespace-nowrap overflow-hidden"
+                        className="sticky top-[104px] z-10 border-b border-terminal-border bg-terminal-bg px-2 py-2 t-label whitespace-nowrap overflow-hidden"
                       >
                         <button
                           type="button"
@@ -3284,7 +3284,7 @@ const ScannerView = memo(function ScannerView({
                         <th
                           key={k}
                           scope="col"
-                          className={`sticky top-0 z-10 cursor-pointer select-none border-b border-terminal-border bg-terminal-bg px-2 py-2 text-right t-label whitespace-nowrap overflow-hidden ${
+                          className={`sticky top-[104px] z-10 cursor-pointer select-none border-b border-terminal-border bg-terminal-bg px-2 py-2 text-right t-label whitespace-nowrap overflow-hidden ${
                             lbSortKey === k ? "font-bold text-cyan-400" : "text-slate-500 hover:text-slate-300"
                           }`}
                           onClick={() => {
@@ -3301,7 +3301,7 @@ const ScannerView = memo(function ScannerView({
                       ))}
                       <th
                         scope="col"
-                        className={`sticky top-0 z-10 w-[90px] cursor-pointer select-none border-b border-terminal-border bg-terminal-bg px-2 py-2 text-right t-label whitespace-nowrap overflow-hidden ${
+                        className={`sticky top-[104px] z-10 w-[90px] cursor-pointer select-none border-b border-terminal-border bg-terminal-bg px-2 py-2 text-right t-label whitespace-nowrap overflow-hidden ${
                           lbSortKey === "rs" ? "font-bold text-cyan-400" : "text-slate-500 hover:text-slate-300"
                         }`}
                         onClick={() => {
@@ -3316,7 +3316,7 @@ const ScannerView = memo(function ScannerView({
                       </th>
                       <th
                         scope="col"
-                        className="sticky top-0 z-10 border-b border-terminal-border bg-terminal-bg px-2 py-2 t-label whitespace-nowrap overflow-hidden"
+                        className="sticky top-[104px] z-10 border-b border-terminal-border bg-terminal-bg px-2 py-2 t-label whitespace-nowrap overflow-hidden"
                       >
                         <button
                           type="button"
@@ -4275,8 +4275,8 @@ export function ThemeDashboard() {
   }
 
   return (
-    <div className="flex min-h-screen flex-col bg-terminal-bg text-slate-200">
-      <div className="sticky top-0 z-30 bg-terminal-bg">
+    <div className="flex min-h-screen min-w-0 flex-col bg-terminal-bg text-slate-200">
+      <div className="sticky top-0 z-50 border-b border-terminal-border/60 bg-terminal-bg shadow-sm">
       <header className="border-b border-terminal-border bg-terminal-elevated px-4 py-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex min-w-0 items-center gap-2.5">
@@ -4509,7 +4509,7 @@ export function ThemeDashboard() {
 
         <main
           id="main-content"
-          className="flex w-full min-w-0 flex-1 flex-row"
+          className="relative z-0 flex w-full min-w-0 flex-1 flex-row"
           aria-label="Dashboard workspace"
         >
           <div className="flex min-w-0 flex-1 basis-0 flex-col bg-terminal-bg p-0">

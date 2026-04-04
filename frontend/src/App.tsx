@@ -2,7 +2,7 @@ import { ThemeDashboard } from "./components/ThemeDashboard";
 
 export default function App() {
   return (
-    <div className="h-screen w-screen bg-terminal-bg">
+    <div className="flex min-h-screen min-w-0 flex-col bg-terminal-bg">
       <ThemeDashboard />
     </div>
   );
