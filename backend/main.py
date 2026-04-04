@@ -12,6 +12,9 @@ import httpx
 from fastapi import FastAPI, HTTPException, Query as FQuery, Header
 from fastapi.middleware.cors import CORSMiddleware
 
+from routers.rotation import router as _rotation_router
+from routers.watchlist import router as _watchlist_router
+
 from time import monotonic
 
 # Secret token for the local-pusher → Render data push endpoint.
@@ -139,6 +142,19 @@ _THEMES_META: dict[str, dict] = {
 }
 
 
+def _maybe_record_rotation_for_themes(themes: list) -> None:
+    """Persist RS snapshot for rotation view; never raises."""
+    live = [t for t in themes if isinstance(t, dict) and not t.get("seed")]
+    if not live:
+        return
+    try:
+        from store.rotation_store import record_snapshot
+
+        record_snapshot(live)
+    except Exception:
+        pass
+
+
 async def _refresh_themes_snapshot(key: str) -> None:
     """
     Refresh one snapshot and store it as last-known-good.
@@ -164,6 +180,8 @@ async def _refresh_themes_snapshot(key: str) -> None:
                 payload["tape"] = payload.get("tape") or []
             _on_upstream_ok(now)
             _CACHE[key] = (now, payload)
+            if key == "themes":
+                _maybe_record_rotation_for_themes(payload.get("themes") or [])
             _THEMES_META[key]["last_ok_monotonic"] = now
             _THEMES_META[key]["last_ok_utc"] = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
             _THEMES_META[key]["last_err"] = None
@@ -252,6 +270,8 @@ def _on_upstream_ok(now: float) -> None:
         _POLL_SEC = max(_POLL_BASE_SEC, _POLL_SEC * 0.5)
 
 app = FastAPI(title="POWER-THEME API", version="0.1.0")
+app.include_router(_rotation_router)
+app.include_router(_watchlist_router)
 
 
 @app.get("/api/startup-diagnostics")
@@ -513,6 +533,9 @@ async def push_leaderboard(
     _THEMES_META[view]["last_ok_utc"] = full_payload["pushed_at"]
     _THEMES_META[view]["last_err"] = None
     _THEMES_META[view]["refreshing"] = False
+
+    if view == "themes":
+        _maybe_record_rotation_for_themes(themes)
 
     import logging as _log
     _log.getLogger(__name__).info(
