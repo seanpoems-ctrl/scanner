@@ -106,10 +106,105 @@ const THEME_PARENT_MAP: Record<string, string> = {
   "Agriculture - Indoor Farming": "Agriculture",
   "Agricultural Operations": "Agriculture",
   "Chemicals-Agricultural": "Agriculture",
+  "Biotech - Gene Therapy": "Healthcare & Biotech",
+  "Biotech - CRISPR": "Healthcare & Biotech",
+  "Medical Devices": "Healthcare & Biotech",
+  "Drug Manufacturers": "Healthcare & Biotech",
+  "Health Information Services": "Healthcare & Biotech",
+  "Fintech - Payments": "Fintech & Finance",
+  "Fintech - Lending": "Fintech & Finance",
+  "Crypto - Digital Assets": "Fintech & Finance",
+  "Capital Markets": "Fintech & Finance",
+  Insurance: "Fintech & Finance",
+  "Utilities - Renewable": "Utilities & Infrastructure",
+  "Utilities - Regulated Gas": "Utilities & Infrastructure",
+  "Utilities - Electric Power": "Utilities & Infrastructure",
+  "Infrastructure - REITs": "Utilities & Infrastructure",
+  "Retail - E-Commerce": "Consumer & Retail",
+  "Consumer Discretionary": "Consumer & Retail",
+  "Auto Parts": "Consumer & Retail",
+  "Mining - Gold/Silver": "Materials & Mining",
+  "Chemicals - Specialty": "Materials & Mining",
+  "Steel & Metals": "Materials & Mining",
 };
 
+/** Finviz themes map uses `Category · Sub` labels; map into rollup parents (no loose "Other" for known rows). */
+function finvizThemeLedgerParent(themeName: string): string {
+  if (themeName === "Biometrics · Gov Defense") return "Space & Defense";
+  if (themeName === "Biometrics · Identity") return "Fintech & Finance";
+  if (themeName.startsWith("Biometrics ·")) return "Artificial Intelligence";
+
+  if (themeName === "Robotics · Medical") return "Healthcare & Biotech";
+  if (themeName.startsWith("Healthcare ·")) return "Healthcare & Biotech";
+  if (themeName.startsWith("Longevity ·")) return "Healthcare & Biotech";
+  if (themeName === "Wearables · Medical") return "Healthcare & Biotech";
+  if (themeName === "Real Estate · Healthcare") return "Healthcare & Biotech";
+
+  if (themeName.startsWith("Fintech ·")) return "Fintech & Finance";
+  if (themeName.startsWith("Blockchain ·")) return "Fintech & Finance";
+
+  if (themeName === "Cloud · Data Centers" || themeName === "Hardware · Data Centers") return "Utilities & Infrastructure";
+  if (themeName === "Energy · Base Utilities" || themeName === "Energy · Clean Utilities") return "Utilities & Infrastructure";
+  if (themeName === "Transportation · Infrastructure") return "Utilities & Infrastructure";
+  if (themeName === "Education · Infrastructure") return "Utilities & Infrastructure";
+  if (themeName === "VR / AR · Infrastructure") return "Utilities & Infrastructure";
+  if (themeName === "Entertainment · Infrastructure") return "Utilities & Infrastructure";
+  if (themeName.startsWith("Real Estate ·")) return "Utilities & Infrastructure";
+
+  if (themeName.startsWith("Consumer ·")) return "Consumer & Retail";
+  if (themeName.startsWith("E-commerce ·")) return "Consumer & Retail";
+  if (themeName.startsWith("Entertainment ·")) return "Consumer & Retail";
+  if (themeName.startsWith("Social ·")) return "Consumer & Retail";
+  if (themeName.startsWith("Smart Home ·")) return "Consumer & Retail";
+  if (themeName.startsWith("VR / AR ·")) return "Consumer & Retail";
+  if (themeName.startsWith("Wearables ·")) return "Consumer & Retail";
+  if (themeName.startsWith("EV ·")) return "Consumer & Retail";
+  if (themeName.startsWith("Nutrition ·")) return "Consumer & Retail";
+  if (themeName.startsWith("Education ·")) return "Consumer & Retail";
+
+  if (themeName.startsWith("Commodities · Metals")) return "Materials & Mining";
+
+  if (themeName === "Environmental · Agriculture") return "Agriculture";
+  if (themeName.startsWith("Agriculture ·")) return "Agriculture";
+  if (themeName.startsWith("Commodities · Agri")) return "Agriculture";
+
+  if (themeName.startsWith("Commodities · Energy")) return "Energy & Commodities";
+  if (themeName.startsWith("Energy ·")) return "Energy & Commodities";
+
+  if (themeName.startsWith("Space ·")) return "Space & Defense";
+  if (themeName.startsWith("Defense ·")) return "Space & Defense";
+  if (themeName === "Autonomous · Defense") return "Space & Defense";
+
+  if (themeName.startsWith("Telecom ·")) return "Telecom & Connectivity";
+
+  if (themeName.startsWith("AI ·")) return "Artificial Intelligence";
+  if (themeName.startsWith("Semiconductors ·")) return "Artificial Intelligence";
+  if (themeName.startsWith("Software ·")) return "Artificial Intelligence";
+  if (themeName.startsWith("Big Data ·")) return "Artificial Intelligence";
+  if (themeName.startsWith("Cloud ·")) return "Artificial Intelligence";
+  if (themeName.startsWith("Cybersecurity ·")) return "Artificial Intelligence";
+  if (themeName.startsWith("IoT ·")) return "Artificial Intelligence";
+  if (themeName.startsWith("Quantum ·")) return "Artificial Intelligence";
+  if (themeName.startsWith("Hardware ·")) return "Artificial Intelligence";
+  if (themeName.startsWith("Automation ·")) return "Artificial Intelligence";
+  if (themeName.startsWith("Robotics ·")) return "Artificial Intelligence";
+  if (themeName.startsWith("Autonomous ·")) return "Artificial Intelligence";
+
+  if (themeName.startsWith("Environmental ·")) return "Energy & Commodities";
+
+  if (themeName.startsWith("Nanotech · Medicine")) return "Healthcare & Biotech";
+  if (themeName.startsWith("Nanotech · Energy")) return "Energy & Commodities";
+  if (themeName.startsWith("Nanotech ·")) return "Materials & Mining";
+
+  if (themeName.startsWith("Transportation ·")) return "Utilities & Infrastructure";
+
+  const dot = themeName.indexOf(" · ");
+  if (dot > 0) return themeName.slice(0, dot);
+  return "Other";
+}
+
 function getParentCategory(themeName: string): string {
-  return THEME_PARENT_MAP[themeName] ?? "Other";
+  return THEME_PARENT_MAP[themeName] ?? finvizThemeLedgerParent(themeName);
 }
 
 function groupThemesByParent(themes: ApiTheme[]): { parent: string; rows: ApiTheme[]; avgRs: number }[] {
