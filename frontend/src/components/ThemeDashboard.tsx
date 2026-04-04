@@ -2602,7 +2602,6 @@ const ScannerView = memo(function ScannerView({
 
   const activateThemeLeaderboardRow = useCallback(
     (row: ApiTheme) => {
-      console.log("[spotlight] activating:", row.theme, row.finvizThemeSlug);
       const fullRow =
         themes.find((t) => t.theme === row.theme) ??
         themes.find((t) => {
@@ -2614,7 +2613,6 @@ const ScannerView = memo(function ScannerView({
           );
         }) ??
         row;
-      console.log("[stocks] row.theme:", row.theme, "→ matched:", fullRow?.theme, "stocks:", fullRow?.stocks?.length);
       setSpotlightThemeName(row.theme);
       const finvizSlug = (row.finvizThemeSlug ?? "").trim();
       if (finvizSlug) {
@@ -2690,9 +2688,14 @@ const ScannerView = memo(function ScannerView({
     const baseGroups = groupThemesByParent(sortedLeaderboardRows.slice(0, 160), rsPercentileMap);
     const enriched = baseGroups.map((g) => {
       const rows = g.rows.map((r) => {
-        const match = themes.find((t) => t.theme === r.theme);
-        if (match && (match.totalCount ?? 0) > 0) {
-          return { ...r, totalCount: match.totalCount };
+        const match =
+          themes.find((t) => t.theme === r.theme) ?? findScannerThemeRowForLeaderboard(r.theme, themes);
+        const fromStocks = match?.stocks?.length ?? 0;
+        const fromTc = match?.totalCount ?? 0;
+        const merged =
+          fromStocks > 0 ? fromStocks : fromTc > 0 ? fromTc : (r.totalCount ?? 0);
+        if (merged > 0 && merged !== (r.totalCount ?? 0)) {
+          return { ...r, totalCount: merged };
         }
         return r;
       });
@@ -2710,9 +2713,14 @@ const ScannerView = memo(function ScannerView({
     const baseGroups = groupIndustriesByParent(slice, rsPercentileMap);
     const enriched = baseGroups.map((g) => {
       const rows = g.rows.map((r) => {
-        const match = themes.find((t) => t.theme === r.theme);
-        if (match && (match.totalCount ?? 0) > 0) {
-          return { ...r, totalCount: match.totalCount };
+        const match =
+          themes.find((t) => t.theme === r.theme) ?? findScannerThemeRowForLeaderboard(r.theme, themes);
+        const fromStocks = match?.stocks?.length ?? 0;
+        const fromTc = match?.totalCount ?? 0;
+        const merged =
+          fromStocks > 0 ? fromStocks : fromTc > 0 ? fromTc : (r.totalCount ?? 0);
+        if (merged > 0 && merged !== (r.totalCount ?? 0)) {
+          return { ...r, totalCount: merged };
         }
         return r;
       });
@@ -2815,6 +2823,21 @@ const ScannerView = memo(function ScannerView({
     ? (rsPercentileMap.get(spotlightTheme.theme) ?? null)
     : null;
 
+  /** Spotlight header pill + All Stocks row count: prefer live scanner stocks/totalCount over leaderboard payload. */
+  const subSpotlightPillStockCount = useMemo(() => {
+    if (!leaderboardSubSpotlight) return 0;
+    const nStocks = subSpotlightThemeRow?.stocks?.length ?? 0;
+    if (nStocks > 0) return nStocks;
+    const rowTc = subSpotlightThemeRow?.totalCount ?? 0;
+    if (rowTc > 0) return rowTc;
+    return leaderboardSubSpotlight.totalCount ?? 0;
+  }, [leaderboardSubSpotlight, subSpotlightThemeRow]);
+
+  /** Site chrome is `[data-testid="site-header"]` — measure its height and match this offset if thead overlaps. */
+  const lbStickyTheadRow = "sticky top-[112px] z-10 bg-terminal-bg";
+  const lbStickyTheadTh =
+    "sticky top-[112px] z-10 border-b border-terminal-border bg-terminal-bg";
+
   return (
     <div className="flex w-full min-w-0 flex-1 flex-row gap-0">
       {/* Left: Market + Brief + VIX */}
@@ -2869,11 +2892,7 @@ const ScannerView = memo(function ScannerView({
                   <span className="shrink-0 rounded-full border border-white/20 bg-terminal-bg/30 px-2.5 py-1 text-center t-micro font-semibold leading-tight text-white/90 backdrop-blur-sm">
                     <span className="font-mono">{leaderboardSubSpotlightBadge(leaderboardSubSpotlight)}</span>
                     <span className="mx-1 text-white/40">·</span>
-                    <span>
-                      {(subSpotlightThemeRow?.stocks?.length ?? 0) > 0
-                        ? subSpotlightThemeRow!.stocks!.length
-                        : (subSpotlightThemeRow?.totalCount ?? leaderboardSubSpotlight.totalCount) ?? 0}
-                    </span>
+                    <span>{subSpotlightPillStockCount}</span>
                     <span className="text-white/60"> stocks</span>
                     {subSpotlightThemeRow != null ? (
                       <>
@@ -3012,11 +3031,7 @@ const ScannerView = memo(function ScannerView({
                   </div>
                 </div>
                 <SpotlightAllStocksSection
-                  totalCount={
-                    (subSpotlightThemeRow?.stocks?.length ?? 0) > 0
-                      ? subSpotlightThemeRow!.stocks!.length
-                      : (subSpotlightThemeRow?.totalCount ?? leaderboardSubSpotlight.totalCount) ?? 0
-                  }
+                  totalCount={subSpotlightPillStockCount}
                   stocks={subSpotlightThemeRow?.stocks ?? []}
                   open={spotlightStocksOpen}
                   onToggle={() => setSpotlightStocksOpen((o) => !o)}
@@ -3303,34 +3318,34 @@ const ScannerView = memo(function ScannerView({
             </div>
           </header>
           <div className="flex-1">
-            <table className="w-full min-w-[980px] table-fixed border-separate border-spacing-0 text-left t-data">
+            <table className="w-full min-w-[980px] table-fixed border-collapse text-left t-data">
               <colgroup>
-                <col style={{ width: "32px" }} />
-                <col style={{ width: "260px" }} />
-                <col style={{ width: "72px" }} />
-                <col style={{ width: "72px" }} />
-                <col style={{ width: "72px" }} />
-                <col style={{ width: "80px" }} />
-                <col style={{ width: "80px" }} />
-                <col style={{ width: "90px" }} />
-                <col style={{ width: "130px" }} />
+                <col className="w-8" />
+                <col className="w-[260px]" />
+                <col className="w-[70px]" />
+                <col className="w-[70px]" />
+                <col className="w-[70px]" />
+                <col className="w-[78px]" />
+                <col className="w-[78px]" />
+                <col className="w-[88px]" />
+                <col className="w-[130px]" />
               </colgroup>
               <caption className="sr-only">
                 Leaderboard of themes or industries with performance and relative strength columns.
               </caption>
               <thead>
-                <tr className="sticky top-[104px] z-10 bg-terminal-bg">
+                <tr className={lbStickyTheadRow}>
                   {leaderboardMode === "themes" || leaderboardMode === "industry" ? (
                     <>
                       <th
                         scope="col"
-                        className="sticky top-[104px] z-10 w-8 border-b border-terminal-border bg-terminal-bg px-2 py-2 text-right t-label whitespace-nowrap overflow-hidden"
+                        className={`${lbStickyTheadTh} w-8 px-2 py-2 text-right t-label whitespace-nowrap overflow-hidden`}
                       >
                         #
                       </th>
                       <th
                         scope="col"
-                        className="sticky top-[104px] z-10 border-b border-terminal-border bg-terminal-bg px-2 py-2 t-label whitespace-nowrap overflow-hidden"
+                        className={`${lbStickyTheadTh} min-w-0 truncate px-2 py-2 text-left t-label whitespace-nowrap overflow-hidden`}
                       >
                         <button
                           type="button"
@@ -3363,7 +3378,7 @@ const ScannerView = memo(function ScannerView({
                         <th
                           key={k}
                           scope="col"
-                          className={`sticky top-[104px] z-10 cursor-pointer select-none border-b border-terminal-border bg-terminal-bg px-2 py-2 text-right t-label whitespace-nowrap overflow-hidden ${
+                          className={`${lbStickyTheadTh} cursor-pointer select-none px-2 py-2 text-right t-label whitespace-nowrap overflow-hidden ${
                             lbSortKey === k ? "font-bold text-cyan-400" : "text-slate-500 hover:text-slate-300"
                           }`}
                           onClick={() => {
@@ -3380,7 +3395,7 @@ const ScannerView = memo(function ScannerView({
                       ))}
                       <th
                         scope="col"
-                        className={`sticky top-[104px] z-10 w-[90px] cursor-pointer select-none border-b border-terminal-border bg-terminal-bg px-2 py-2 text-right t-label whitespace-nowrap overflow-hidden ${
+                        className={`${lbStickyTheadTh} cursor-pointer select-none px-2 py-2 text-right t-label whitespace-nowrap overflow-hidden ${
                           lbSortKey === "rs" ? "font-bold text-cyan-400" : "text-slate-500 hover:text-slate-300"
                         }`}
                         onClick={() => {
@@ -3395,7 +3410,7 @@ const ScannerView = memo(function ScannerView({
                       </th>
                       <th
                         scope="col"
-                        className="sticky top-[104px] z-10 border-b border-terminal-border bg-terminal-bg px-2 py-2 t-label whitespace-nowrap overflow-hidden"
+                        className={`${lbStickyTheadTh} min-w-0 truncate px-2 py-2 text-left t-label whitespace-nowrap overflow-hidden`}
                       >
                         <button
                           type="button"
@@ -3546,7 +3561,6 @@ const ScannerView = memo(function ScannerView({
                                   }`}
                                   onClick={(e) => {
                                     e.stopPropagation();
-                                    console.log("[spotlight] activating:", industry.theme, industry.finvizThemeSlug);
                                     setLeaderboardSubMoversNonce((n) => n + 1);
                                     setSpotlightThemeName(industry.theme);
                                     setLeaderboardSubSpotlight({
@@ -4357,7 +4371,10 @@ export function ThemeDashboard() {
 
   return (
     <div className="flex min-h-screen min-w-0 flex-col bg-terminal-bg text-slate-200">
-      <div className="sticky top-0 z-50 border-b border-terminal-border/60 bg-terminal-bg shadow-sm">
+      <div
+        className="sticky top-0 z-50 border-b border-terminal-border/60 bg-terminal-bg shadow-sm"
+        data-testid="site-header"
+      >
       <header className="border-b border-terminal-border bg-terminal-elevated px-4 py-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex min-w-0 items-center gap-2.5">
