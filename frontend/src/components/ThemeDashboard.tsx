@@ -503,10 +503,13 @@ function getIndustryAdr(row: ThemeIndustryRow): number | null {
 
 /** Finviz industry names → macro sectors (groups.ashx industry view). */
 const INDUSTRY_PARENT_MAP: Record<string, string> = {
+  // Technology
   Semiconductors: "Technology",
   "Semiconductor Equipment & Materials": "Technology",
   "Software—Application": "Technology",
   "Software—Infrastructure": "Technology",
+  "Software - Application": "Technology",
+  "Software - Infrastructure": "Technology",
   "Information Technology Services": "Technology",
   "Communication Equipment": "Technology",
   "Computer Hardware": "Technology",
@@ -514,10 +517,17 @@ const INDUSTRY_PARENT_MAP: Record<string, string> = {
   "Electronics & Computer Distribution": "Technology",
   "Scientific & Technical Instruments": "Technology",
   Solar: "Technology",
+  "Consumer Electronics": "Technology",
+  "Internet Retail": "Technology",
+  "Internet Content & Information": "Technology",
+  "Electronic Gaming & Multimedia": "Technology",
 
+  // Healthcare
   Biotechnology: "Healthcare",
   "Drug Manufacturers—General": "Healthcare",
   "Drug Manufacturers—Specialty & Generic": "Healthcare",
+  "Drug Manufacturers - General": "Healthcare",
+  "Drug Manufacturers - Specialty & Generic": "Healthcare",
   "Medical Devices": "Healthcare",
   "Medical Instruments & Supplies": "Healthcare",
   "Diagnostics & Research": "Healthcare",
@@ -525,43 +535,84 @@ const INDUSTRY_PARENT_MAP: Record<string, string> = {
   "Medical Care Facilities": "Healthcare",
   "Pharmaceutical Retailers": "Healthcare",
   "Health Information Services": "Healthcare",
+  "Medical Distribution": "Healthcare",
+  Hospitals: "Healthcare",
 
+  // Energy
   "Oil & Gas E&P": "Energy",
   "Oil & Gas Integrated": "Energy",
   "Oil & Gas Midstream": "Energy",
   "Oil & Gas Refining & Marketing": "Energy",
   "Oil & Gas Equipment & Services": "Energy",
   "Oil & Gas Drilling": "Energy",
+  "Oil & Gas - E&P": "Energy",
+  "Oil & Gas - Integrated": "Energy",
+  "Oil & Gas - Midstream": "Energy",
+  "Oil & Gas - Refining & Marketing": "Energy",
+  "Oil & Gas - Equipment & Services": "Energy",
+  "Oil & Gas - Drilling": "Energy",
   Uranium: "Energy",
   Coal: "Energy",
+  "Thermal Coal": "Energy",
+  "Coking Coal": "Energy",
 
+  // Financials
   "Banks—Diversified": "Financials",
   "Banks—Regional": "Financials",
+  "Banks - Diversified": "Financials",
+  "Banks - Regional": "Financials",
   "Insurance—Diversified": "Financials",
   "Insurance—Life": "Financials",
   "Insurance—Property & Casualty": "Financials",
   "Insurance—Specialty": "Financials",
+  "Insurance—Reinsurance": "Financials",
+  "Insurance - Diversified": "Financials",
+  "Insurance - Life": "Financials",
+  "Insurance - Property & Casualty": "Financials",
+  "Insurance - Specialty": "Financials",
+  "Insurance - Reinsurance": "Financials",
+  "Insurance Brokers": "Financials",
   "Asset Management": "Financials",
   "Capital Markets": "Financials",
   "Financial Data & Stock Exchanges": "Financials",
   "Credit Services": "Financials",
   "Mortgage Finance": "Financials",
+  "Shell Companies": "Financials",
+  "Financial Conglomerates": "Financials",
 
+  // Consumer Discretionary
   "Auto Manufacturers": "Consumer Discretionary",
   "Auto Parts": "Consumer Discretionary",
+  "Auto & Truck Dealerships": "Consumer Discretionary",
   "Specialty Retail": "Consumer Discretionary",
   "Apparel Retail": "Consumer Discretionary",
   "Apparel Manufacturing": "Consumer Discretionary",
+  "Footwear & Accessories": "Consumer Discretionary",
   Restaurants: "Consumer Discretionary",
   Leisure: "Consumer Discretionary",
   Gambling: "Consumer Discretionary",
   "Travel Services": "Consumer Discretionary",
   Lodging: "Consumer Discretionary",
   "Residential Construction": "Consumer Discretionary",
+  "Furnishings Fixtures & Appliances": "Consumer Discretionary",
+  "Furnishings, Fixtures & Appliances": "Consumer Discretionary",
+  "Personal Services": "Consumer Discretionary",
+  "Luxury Goods": "Consumer Discretionary",
+  "Discount Stores": "Consumer Discretionary",
+  "Department Stores": "Consumer Discretionary",
+  "Home Improvement Retail": "Consumer Discretionary",
+  "Recreational Vehicles": "Consumer Discretionary",
+  "Resorts & Casinos": "Consumer Discretionary",
+  "Textile Manufacturing": "Consumer Discretionary",
 
+  // Consumer Staples
   "Beverages—Non-Alcoholic": "Consumer Staples",
   "Beverages—Alcoholic": "Consumer Staples",
   "Beverages—Brewers": "Consumer Staples",
+  "Beverages - Non-Alcoholic": "Consumer Staples",
+  "Beverages - Alcoholic": "Consumer Staples",
+  "Beverages - Brewers": "Consumer Staples",
+  "Beverages - Wineries & Distilleries": "Consumer Staples",
   Confectioners: "Consumer Staples",
   "Farm Products": "Consumer Staples",
   "Food Distribution": "Consumer Staples",
@@ -570,6 +621,7 @@ const INDUSTRY_PARENT_MAP: Record<string, string> = {
   "Packaged Foods": "Consumer Staples",
   Tobacco: "Consumer Staples",
 
+  // Industrials
   "Aerospace & Defense": "Industrials",
   Airlines: "Industrials",
   "Airports & Air Services": "Industrials",
@@ -581,17 +633,38 @@ const INDUSTRY_PARENT_MAP: Record<string, string> = {
   "Waste Management": "Industrials",
   "Engineering & Construction": "Industrials",
   "Infrastructure Operations": "Industrials",
+  "Rental & Leasing Services": "Industrials",
+  "Security & Protection Services": "Industrials",
+  "Staffing & Employment Services": "Industrials",
+  Conglomerates: "Industrials",
+  "Marine Shipping": "Industrials",
+  Railroads: "Industrials",
+  Trucking: "Industrials",
+  "Integrated Freight & Logistics": "Industrials",
+  "Tools & Accessories": "Industrials",
+  "Electrical Equipment & Parts": "Industrials",
+  "Building Products & Equipment": "Industrials",
+  "Building Materials": "Industrials",
+  "Business Equipment & Supplies": "Industrials",
+  "Consulting Services": "Industrials",
+  "Specialty Business Services": "Industrials",
 
+  // Materials
   Aluminum: "Materials",
   Copper: "Materials",
   Gold: "Materials",
   Silver: "Materials",
   Steel: "Materials",
   Chemicals: "Materials",
+  "Specialty Chemicals": "Materials",
   "Agricultural Inputs": "Materials",
   "Lumber & Wood Production": "Materials",
   "Paper & Paper Products": "Materials",
+  "Packaging & Containers": "Materials",
+  "Other Industrial Metals & Mining": "Materials",
+  "Other Precious Metals & Mining": "Materials",
 
+  // Real Estate
   "REIT—Retail": "Real Estate",
   "REIT—Office": "Real Estate",
   "REIT—Industrial": "Real Estate",
@@ -600,26 +673,55 @@ const INDUSTRY_PARENT_MAP: Record<string, string> = {
   "REIT—Specialty": "Real Estate",
   "REIT—Diversified": "Real Estate",
   "REIT—Mortgage": "Real Estate",
+  "REIT—Hotel & Motel": "Real Estate",
+  "REIT - Retail": "Real Estate",
+  "REIT - Office": "Real Estate",
+  "REIT - Industrial": "Real Estate",
+  "REIT - Residential": "Real Estate",
+  "REIT - Healthcare Facilities": "Real Estate",
+  "REIT - Specialty": "Real Estate",
+  "REIT - Diversified": "Real Estate",
+  "REIT - Mortgage": "Real Estate",
+  "REIT - Hotel & Motel": "Real Estate",
   "Real Estate Services": "Real Estate",
   "Real Estate—Development": "Real Estate",
+  "Real Estate - Development": "Real Estate",
+  "Real Estate—Diversified": "Real Estate",
+  "Real Estate - Diversified": "Real Estate",
 
+  // Utilities
   "Utilities—Regulated Electric": "Utilities",
   "Utilities—Regulated Gas": "Utilities",
   "Utilities—Regulated Water": "Utilities",
   "Utilities—Renewable": "Utilities",
   "Utilities—Independent Power Producers": "Utilities",
+  "Utilities—Diversified": "Utilities",
+  "Utilities - Regulated Electric": "Utilities",
+  "Utilities - Regulated Gas": "Utilities",
+  "Utilities - Regulated Water": "Utilities",
+  "Utilities - Renewable": "Utilities",
+  "Utilities - Independent Power Producers": "Utilities",
+  "Utilities - Diversified": "Utilities",
 
+  // Communication Services
   "Telecom Services": "Communication Services",
   Entertainment: "Communication Services",
-  "Electronic Gaming & Multimedia": "Communication Services",
-  "Internet Content & Information": "Communication Services",
-  Publishing: "Communication Services",
   Broadcasting: "Communication Services",
+  Publishing: "Communication Services",
   "Advertising Agencies": "Communication Services",
+  "Marketing Services": "Communication Services",
+
+  // Education & Services
+  "Education & Training Services": "Education & Services",
 };
 
-function getIndustryParent(industryName: string): string {
-  return INDUSTRY_PARENT_MAP[industryName] ?? "Other";
+function getIndustryParent(name: string): string {
+  if (INDUSTRY_PARENT_MAP[name]) return INDUSTRY_PARENT_MAP[name];
+  const normalised = name.replace(/\s*[—–-]\s*/g, " - ");
+  if (INDUSTRY_PARENT_MAP[normalised]) return INDUSTRY_PARENT_MAP[normalised];
+  const prefix = name.split(/[—–\-·]/)[0]?.trim() ?? "";
+  if (prefix && prefix !== name) return prefix;
+  return "Other";
 }
 
 type ApiPayload = {
