@@ -736,14 +736,6 @@ function useMarketStatus() {
   return status;
 }
 
-type ThemeUniverseSpotlight = {
-  label: string;
-  slug: string;
-  updated_at: string;
-  best: { ticker: string; today_return_pct: number }[];
-  worst: { ticker: string; today_return_pct: number }[];
-};
-
 type IndustryMoversRow = { ticker: string; close: number; change_pct: number };
 
 type IndustryMoversPayload = {
@@ -2258,23 +2250,62 @@ function usePremarketGappers(filters: {
   return { data, loading, error, reload: load };
 }
 
-function useUniverseSpotlight(label: string | null) {
-  const [data, setData] = useState<ThemeUniverseSpotlight | null>(null);
+/** Main Thematic Spotlight movers: Finviz screeners (not theme-universe cache). */
+function usePrimarySpotlightMovers(
+  mode: "themes" | "industry",
+  spotlightTheme: ApiTheme | null,
+  enabled: boolean
+) {
+  const [data, setData] = useState<IndustryMoversPayload | null>(null);
   const [loading, setLoading] = useState(false);
 
+  const themesFetchKey =
+    enabled && mode === "themes" && spotlightTheme
+      ? `${(spotlightTheme.finvizThemeSlug ?? "").trim()}\0${spotlightTheme.theme}`
+      : "";
+  const industryFetchKey =
+    enabled && mode === "industry" && spotlightTheme
+      ? `${getIndustryParent(spotlightTheme.theme)}\0${spotlightTheme.theme}`
+      : "";
+
   useEffect(() => {
-    if (!label) {
+    if (!enabled || !spotlightTheme) {
       setData(null);
       setLoading(false);
       return;
     }
+    if (mode === "themes") {
+      const slug = (spotlightTheme.finvizThemeSlug ?? "").trim();
+      if (!slug) {
+        setData(null);
+        setLoading(false);
+        return;
+      }
+    }
+
     let active = true;
+    setData(null);
     setLoading(true);
-    const themeName = (label ?? "").trim();
-    fetch(`${API_BASE_URL}/api/theme-universe/spotlight?label=${encodeURIComponent(themeName)}`)
+
+    const url =
+      mode === "industry"
+        ? (() => {
+            const p = new URLSearchParams();
+            p.set("industry", spotlightTheme.theme);
+            p.set("parent", getIndustryParent(spotlightTheme.theme));
+            return `${API_BASE_URL}/api/industry/subindustry-movers?${p.toString()}`;
+          })()
+        : (() => {
+            const p = new URLSearchParams();
+            p.set("slug", (spotlightTheme.finvizThemeSlug ?? "").trim());
+            p.set("label", spotlightTheme.theme);
+            return `${API_BASE_URL}/api/themes/finviz-movers?${p.toString()}`;
+          })();
+
+    fetch(url)
       .then(async (r) => {
-        if (!r.ok) throw new Error(`spotlight ${r.status}`);
-        return (await r.json()) as ThemeUniverseSpotlight;
+        if (!r.ok) throw new Error(`primary spotlight movers ${r.status}`);
+        return (await r.json()) as IndustryMoversPayload;
       })
       .then((d) => {
         if (!active) return;
@@ -2291,7 +2322,7 @@ function useUniverseSpotlight(label: string | null) {
     return () => {
       active = false;
     };
-  }, [label]);
+  }, [enabled, mode, themesFetchKey, industryFetchKey]);
 
   return { data, loading };
 }
@@ -2310,6 +2341,7 @@ function useLeaderboardSubMovers(sel: LeaderboardSubSpotlight | null, enabled: b
       return;
     }
     let active = true;
+    setData(null);
     setLoading(true);
     const url =
       sel.kind === "industry"
@@ -2392,6 +2424,7 @@ const ScannerView = memo(function ScannerView({
   >(null);
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [lbSortKey, setLbSortKey] = useState<LbSortKey>("rs");
+  const [lbSortDir, setLbSortDir] = useState<"desc" | "asc">("desc");
 
   const themes = payload.themes ?? [];
   const sortedThemes = useMemo(() => {
@@ -2510,18 +2543,24 @@ const ScannerView = memo(function ScannerView({
     return rows;
   }, [finvizFilteredRows, sortDir, sortKey]);
 
+  const lbSortMul = lbSortDir === "desc" ? 1 : -1;
+
   const themesLeaderboardGroups = useMemo(() => {
     if (leaderboardMode !== "themes") return [];
     const groups = groupThemesByParent(sortedLeaderboardRows.slice(0, 160), rsPercentileMap);
-    return [...groups].sort((a, b) => getParentLbSortValue(b, lbSortKey) - getParentLbSortValue(a, lbSortKey));
-  }, [leaderboardMode, sortedLeaderboardRows, rsPercentileMap, lbSortKey]);
+    return [...groups].sort(
+      (a, b) => lbSortMul * (getParentLbSortValue(b, lbSortKey) - getParentLbSortValue(a, lbSortKey))
+    );
+  }, [leaderboardMode, sortedLeaderboardRows, rsPercentileMap, lbSortKey, lbSortMul]);
 
   const industryLeaderboardGroups = useMemo(() => {
     if (leaderboardMode !== "industry") return [];
     const slice = finvizFilteredRows.slice(0, 160) as ThemeIndustryRow[];
     const groups = groupIndustriesByParent(slice, rsPercentileMap);
-    return [...groups].sort((a, b) => getParentLbSortValue(b, lbSortKey) - getParentLbSortValue(a, lbSortKey));
-  }, [leaderboardMode, finvizFilteredRows, rsPercentileMap, lbSortKey]);
+    return [...groups].sort(
+      (a, b) => lbSortMul * (getParentLbSortValue(b, lbSortKey) - getParentLbSortValue(a, lbSortKey))
+    );
+  }, [leaderboardMode, finvizFilteredRows, rsPercentileMap, lbSortKey, lbSortMul]);
 
   const rsRows = useMemo(() => {
     return sortedThemes
@@ -2542,8 +2581,10 @@ const ScannerView = memo(function ScannerView({
   }, [themes, finvizRows, spotlightThemeName, filteredThemes, sortedThemes]);
 
   const showLeaderboardSubSpot = leaderboardSubSpotlight !== null;
-  const { data: uniSpotlight } = useUniverseSpotlight(
-    showLeaderboardSubSpot ? null : spotlightTheme?.theme ?? null
+  const { data: primaryMovers, loading: primaryMoversLoading } = usePrimarySpotlightMovers(
+    leaderboardMode,
+    spotlightTheme,
+    !showLeaderboardSubSpot && spotlightTheme != null
   );
   const { data: industryMovers, loading: industryMoversLoading } = useLeaderboardSubMovers(
     leaderboardSubSpotlight,
@@ -2599,9 +2640,9 @@ const ScannerView = memo(function ScannerView({
     : null;
 
   return (
-    <div className="flex max-h-[calc(100vh-7.75rem)] min-h-0 w-full min-w-0 flex-1 flex-row gap-3 overflow-hidden">
+    <div className="flex w-full min-w-0 flex-1 flex-row gap-3">
       {/* Left: Market + Brief + VIX */}
-      <div className="fintech-scroll flex max-h-full w-[360px] min-w-[360px] shrink-0 flex-col gap-3 overflow-y-auto pr-1">
+      <div className="flex w-[360px] min-w-[360px] shrink-0 flex-col gap-3 pr-1">
         <MarketRegimeCard state={payload.market_momentum_score?.state} message={payload.market_momentum_score?.message} />
         <IntelBriefCard
           mode={briefMode}
@@ -2616,11 +2657,11 @@ const ScannerView = memo(function ScannerView({
       </div>
 
       {/* Middle: RS + Spotlight + Constituents */}
-      <div className="flex max-h-full min-h-0 w-[420px] min-w-[420px] shrink-0 flex-col gap-3 overflow-y-auto pr-1">
+      <div className="flex w-[420px] min-w-[420px] shrink-0 flex-col gap-3 pr-1">
         <div className="shrink-0">
           <RsSnapshot rows={rsRows} />
         </div>
-        <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-terminal-border bg-terminal-card shadow-sm">
+        <div className="flex flex-1 flex-col rounded-xl border border-terminal-border bg-terminal-card shadow-sm">
           {leaderboardSubSpotlight ? (
             <>
               <div className={`shrink-0 px-4 pb-3.5 pt-3 ${subIndustryBannerShellClass(leaderboardSubSpotlight.perf1D)}`}>
@@ -2666,8 +2707,8 @@ const ScannerView = memo(function ScannerView({
                   </span>
                 </div>
               </div>
-              <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-                <div className="min-h-0 flex-1 overflow-y-auto">
+              <div className="flex flex-1 flex-col">
+                <div className="flex-1">
                   <div className="space-y-3 px-3 py-3">
                 <div className="grid grid-cols-3 gap-2">
                   {(
@@ -2735,7 +2776,7 @@ const ScannerView = memo(function ScannerView({
                 </p>
                 <ThemePerfStrip4 t={subSpotlightThemeRow ?? undefined} />
                 {industryMoversLoading ? (
-                  <p className="text-xs text-slate-500">Loading movers…</p>
+                  <PanelLoading label="Loading movers…" />
                 ) : industryMovers && !industryMovers.ok ? (
                   <p className="text-xs text-rose-300/90">
                     {industryMovers.detail ?? "Could not load movers for this industry."}
@@ -2821,8 +2862,8 @@ const ScannerView = memo(function ScannerView({
                   </p>
                 ) : null}
               </header>
-              <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-                <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
+              <div className="flex flex-1 flex-col">
+                <div className="flex-1 px-4 py-3">
             {!spotlightTheme && !leaderboardSubSpotlight ? (
               <p className="text-xs text-slate-500">No theme selected.</p>
             ) : spotlightTheme ? (
@@ -2845,50 +2886,58 @@ const ScannerView = memo(function ScannerView({
                   </p>
                 </div>
                 <ThemePerfStrip4 t={spotlightTheme} />
-                <div className="mt-3 grid grid-cols-2 gap-2">
-                  {(uniSpotlight?.best ?? []).slice(0, 4).map((x) => {
-                    const symU = String(x.ticker || "").toUpperCase();
-                    const onList = symU && watchlisted.has(symU);
-                    return (
-                      <div key={`b-${x.ticker}`} className="rounded-lg border border-terminal-border bg-terminal-bg/40 px-2.5 py-2">
-                        <div className="flex items-baseline justify-between gap-2">
-                          <div className="flex min-w-0 items-center gap-1">
-                            <button
-                              type="button"
-                              onClick={() => onSelectTicker(symU, { theme: spotlightTheme?.theme, sector: spotlightTheme?.sector })}
-                              className="truncate font-mono text-[12px] font-semibold text-accent hover:underline"
+                {primaryMoversLoading ? (
+                  <PanelLoading label="Loading movers…" />
+                ) : leaderboardMode === "themes" && !(spotlightTheme.finvizThemeSlug ?? "").trim() ? (
+                  <p className="mt-3 text-xs text-slate-500">No movers data for this theme</p>
+                ) : primaryMovers && !primaryMovers.ok ? (
+                  <p className="mt-3 text-xs text-rose-300/90">
+                    {primaryMovers.detail ?? "No movers data for this theme"}
+                  </p>
+                ) : !primaryMovers ||
+                  (!(primaryMovers.top_gainers?.length) && !(primaryMovers.top_losers?.length)) ? (
+                  <p className="mt-3 text-xs text-slate-500">No movers data for this theme</p>
+                ) : (
+                  <div className="mt-3">
+                    <p className="mb-2 t-label">Today&apos;s movers</p>
+                    <div className="space-y-2.5">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="w-14 shrink-0 t-micro font-bold text-emerald-400">▲ Best</span>
+                        <div className="flex min-w-0 flex-1 flex-wrap gap-1.5">
+                          {(primaryMovers.top_gainers ?? []).map((r) => (
+                            <span
+                              key={`pg-${r.ticker}`}
+                              className="inline-flex items-center gap-1 rounded-full border border-emerald-800/50 bg-emerald-950/35 px-2 py-0.5 t-mono font-semibold text-emerald-300"
                             >
-                              {x.ticker}
-                            </button>
-                            <button
-                              type="button"
-                              title={onList ? "Remove from watchlist" : "Add to watchlist"}
-                              aria-label={onList ? "Remove from watchlist" : "Add to watchlist"}
-                              onClick={() =>
-                                void onToggleWatchlist(symU, {
-                                  theme: spotlightTheme?.theme,
-                                  sector: spotlightTheme?.sector,
-                                })
-                              }
-                              className="shrink-0 rounded p-0.5 text-slate-500 hover:bg-terminal-elevated/60 hover:text-amber-300"
-                            >
-                              <Star className={`h-3 w-3 ${onList ? "fill-amber-400 text-amber-400" : ""}`} strokeWidth={2} />
-                            </button>
-                          </div>
-                          <span className={`t-mono ${pctClass(x.today_return_pct)}`}>
-                            {x.today_return_pct >= 0 ? "+" : ""}
-                            {x.today_return_pct.toFixed(2)}%
-                          </span>
+                              {r.ticker}
+                              <span className={pctClass(r.change_pct)}>
+                                {r.change_pct >= 0 ? "+" : ""}
+                                {r.change_pct.toFixed(1)}%
+                              </span>
+                            </span>
+                          ))}
                         </div>
                       </div>
-                    );
-                  })}
-                  {!(uniSpotlight?.best?.length) ? (
-                    <div className="col-span-2 rounded-lg border border-terminal-border bg-terminal-bg/40 px-3 py-2 text-xs text-slate-500">
-                      No mover data.
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="w-14 shrink-0 t-micro font-bold text-rose-400">▼ Worst</span>
+                        <div className="flex min-w-0 flex-1 flex-wrap gap-1.5">
+                          {(primaryMovers.top_losers ?? []).map((r) => (
+                            <span
+                              key={`pl-${r.ticker}`}
+                              className="inline-flex items-center gap-1 rounded-full border border-rose-900/50 bg-rose-950/35 px-2 py-0.5 t-mono font-semibold text-rose-300"
+                            >
+                              {r.ticker}
+                              <span className={pctClass(r.change_pct)}>
+                                {r.change_pct >= 0 ? "+" : ""}
+                                {r.change_pct.toFixed(1)}%
+                              </span>
+                            </span>
+                          ))}
+                        </div>
+                      </div>
                     </div>
-                  ) : null}
-                </div>
+                  </div>
+                )}
               </>
             ) : null}
                 </div>
@@ -2983,9 +3032,9 @@ const ScannerView = memo(function ScannerView({
         </div>
       </div>
 
-      {/* Right: Leaderboard — sticky thead via border-separate + sticky top-0 on th */}
-      <div className="flex max-h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-        <section className="flex max-h-full min-h-0 flex-1 flex-col rounded-xl border border-terminal-border bg-terminal-card shadow-sm">
+      {/* Right: Leaderboard — sticky thead sticks to viewport while page scrolls */}
+      <div className="flex min-w-0 flex-1 flex-col">
+        <section className="flex flex-1 flex-col rounded-xl border border-terminal-border bg-terminal-card shadow-sm">
           <header className="flex flex-wrap items-center justify-between gap-3 border-b border-terminal-border px-4 py-3">
             <div className="min-w-0">
               <h2 className="truncate text-sm font-semibold text-white">Leaderboard</h2>
@@ -3047,7 +3096,10 @@ const ScannerView = memo(function ScannerView({
               {leaderboardMode === "themes" || leaderboardMode === "industry" ? (
                 <select
                   value={lbSortKey}
-                  onChange={(e) => setLbSortKey(e.target.value as LbSortKey)}
+                  onChange={(e) => {
+                    setLbSortKey(e.target.value as LbSortKey);
+                    setLbSortDir("desc");
+                  }}
                   style={{ colorScheme: "dark", background: "#0b1220", color: "#cbd5e1" }}
                   className="ml-2 cursor-pointer rounded border border-terminal-border bg-terminal-bg px-2 py-1 text-[11px] font-mono text-slate-300 accent-cyan-500 hover:border-slate-500 focus:border-cyan-600 focus:outline-none focus:ring-1 focus:ring-cyan-600"
                 >
@@ -3069,35 +3121,35 @@ const ScannerView = memo(function ScannerView({
               </div>
             </div>
           </header>
-          <div className="fintech-scroll max-h-full min-h-0 flex-1 overflow-y-auto">
+          <div className="flex-1">
             <table className="w-full min-w-[980px] table-fixed border-separate border-spacing-0 text-left t-data">
               <colgroup>
-                <col className="w-8" />
-                <col className="min-w-[200px] w-[280px]" />
-                <col className="w-[70px]" />
-                <col className="w-[70px]" />
-                <col className="w-[70px]" />
-                <col className="w-[80px]" />
-                <col className="w-[80px]" />
-                <col className="w-[90px]" />
-                <col className="w-[120px]" />
+                <col style={{ width: "32px" }} />
+                <col style={{ width: "260px" }} />
+                <col style={{ width: "72px" }} />
+                <col style={{ width: "72px" }} />
+                <col style={{ width: "72px" }} />
+                <col style={{ width: "80px" }} />
+                <col style={{ width: "80px" }} />
+                <col style={{ width: "90px" }} />
+                <col style={{ width: "130px" }} />
               </colgroup>
               <caption className="sr-only">
                 Leaderboard of themes or industries with performance and relative strength columns.
               </caption>
               <thead>
-                <tr>
+                <tr className="sticky top-0 z-10 bg-terminal-bg">
                   {leaderboardMode === "themes" || leaderboardMode === "industry" ? (
                     <>
                       <th
                         scope="col"
-                        className="sticky top-0 z-10 w-8 border-b border-terminal-border bg-terminal-card px-2 py-2 text-right t-label whitespace-nowrap"
+                        className="sticky top-0 z-10 w-8 border-b border-terminal-border bg-terminal-bg px-2 py-2 text-right t-label whitespace-nowrap overflow-hidden"
                       >
                         #
                       </th>
                       <th
                         scope="col"
-                        className="sticky top-0 z-10 min-w-[200px] w-[280px] border-b border-terminal-border bg-terminal-card px-2 py-2 t-label whitespace-nowrap"
+                        className="sticky top-0 z-10 border-b border-terminal-border bg-terminal-bg px-2 py-2 t-label whitespace-nowrap overflow-hidden"
                       >
                         <button
                           type="button"
@@ -3130,27 +3182,39 @@ const ScannerView = memo(function ScannerView({
                         <th
                           key={k}
                           scope="col"
-                          className={`sticky top-0 z-10 cursor-pointer select-none border-b border-terminal-border bg-terminal-card px-2 py-2 text-right t-label whitespace-nowrap ${
+                          className={`sticky top-0 z-10 cursor-pointer select-none border-b border-terminal-border bg-terminal-bg px-2 py-2 text-right t-label whitespace-nowrap overflow-hidden ${
                             lbSortKey === k ? "font-bold text-cyan-400" : "text-slate-500 hover:text-slate-300"
                           }`}
-                          onClick={() => setLbSortKey(k)}
+                          onClick={() => {
+                            if (lbSortKey === k) setLbSortDir((d) => (d === "desc" ? "asc" : "desc"));
+                            else {
+                              setLbSortKey(k);
+                              setLbSortDir("desc");
+                            }
+                          }}
                         >
                           {label}
-                          {lbSortKey === k ? " ▼" : ""}
+                          {lbSortKey === k ? (lbSortDir === "desc" ? " ▼" : " ▲") : ""}
                         </th>
                       ))}
                       <th
                         scope="col"
-                        className={`sticky top-0 z-10 w-[90px] cursor-pointer select-none border-b border-terminal-border bg-terminal-card px-2 py-2 text-right t-label whitespace-nowrap ${
+                        className={`sticky top-0 z-10 w-[90px] cursor-pointer select-none border-b border-terminal-border bg-terminal-bg px-2 py-2 text-right t-label whitespace-nowrap overflow-hidden ${
                           lbSortKey === "rs" ? "font-bold text-cyan-400" : "text-slate-500 hover:text-slate-300"
                         }`}
-                        onClick={() => setLbSortKey("rs")}
+                        onClick={() => {
+                          if (lbSortKey === "rs") setLbSortDir((d) => (d === "desc" ? "asc" : "desc"));
+                          else {
+                            setLbSortKey("rs");
+                            setLbSortDir("desc");
+                          }
+                        }}
                       >
-                        RS{lbSortKey === "rs" ? " ▼" : ""}
+                        RS{lbSortKey === "rs" ? (lbSortDir === "desc" ? " ▼" : " ▲") : ""}
                       </th>
                       <th
                         scope="col"
-                        className="sticky top-0 z-10 w-[120px] border-b border-terminal-border bg-terminal-card px-2 py-2 t-label whitespace-nowrap"
+                        className="sticky top-0 z-10 border-b border-terminal-border bg-terminal-bg px-2 py-2 t-label whitespace-nowrap overflow-hidden"
                       >
                         <button
                           type="button"
@@ -3178,13 +3242,13 @@ const ScannerView = memo(function ScannerView({
               <tbody>
                 {finvizLbLoading && !finvizFilteredRows.length ? (
                   <tr>
-                    <td colSpan={9}>
+                    <td colSpan={9} className="overflow-hidden whitespace-nowrap">
                       <SkeletonRows count={8} />
                     </td>
                   </tr>
                 ) : finvizLbError && !finvizFilteredRows.length ? (
                   <tr>
-                    <td colSpan={9} className="px-3 py-4">
+                    <td colSpan={9} className="overflow-hidden whitespace-nowrap px-3 py-4">
                       <ErrorBanner
                         title={`Failed to load ${leaderboardMode} data`}
                         detail={finvizLbError}
@@ -3193,7 +3257,7 @@ const ScannerView = memo(function ScannerView({
                   </tr>
                 ) : !finvizLbLoading && sortedLeaderboardRows.length === 0 ? (
                   <tr>
-                    <td colSpan={9}>
+                    <td colSpan={9} className="overflow-hidden whitespace-nowrap">
                       <EmptyState
                         icon={LayoutGrid}
                         title={`No ${leaderboardMode} data yet`}
@@ -3222,7 +3286,7 @@ const ScannerView = memo(function ScannerView({
                           if (lbSortKey === "6m") return row.perf6M ?? -Infinity;
                           return -1;
                         };
-                        return val(b) - val(a);
+                        return lbSortMul * (val(b) - val(a));
                       });
                       return (
                         <Fragment key={parent}>
@@ -3234,10 +3298,10 @@ const ScannerView = memo(function ScannerView({
                             role="button"
                             aria-expanded={isOpen}
                           >
-                            <td className="whitespace-nowrap px-2 py-2.5 text-right font-mono tabular-nums text-slate-600">
+                            <td className="whitespace-nowrap overflow-hidden px-2 py-2.5 text-right font-mono tabular-nums text-slate-600">
                               {idx + 1}
                             </td>
-                            <td className="min-w-0 max-w-[280px] px-2 py-2.5">
+                            <td className="min-w-0 max-w-[240px] overflow-hidden px-2 py-2.5">
                               <div className="flex min-w-0 items-center gap-2">
                                 <ChevronRight
                                   size={11}
@@ -3246,8 +3310,8 @@ const ScannerView = memo(function ScannerView({
                                   }`}
                                   aria-hidden
                                 />
-                                <div className="min-w-0">
-                                  <p className="max-w-[260px] truncate text-[12px] font-semibold text-slate-200">{parent}</p>
+                                <div className="min-w-0 max-w-[240px]">
+                                  <p className="max-w-[240px] truncate text-[12px] font-semibold text-slate-200">{parent}</p>
                                   <p className="truncate t-micro text-slate-600">
                                     {rows.length} industries · {totalStockCount} stocks
                                   </p>
@@ -3257,14 +3321,14 @@ const ScannerView = memo(function ScannerView({
                             {[avgPerf1D, avgPerf1W, avgPerf1M, avgPerf3M, avgPerf6M].map((v, i) => (
                               <td
                                 key={i}
-                                className={`whitespace-nowrap px-2 py-2.5 text-right font-mono tabular-nums font-bold ${
+                                className={`whitespace-nowrap overflow-hidden px-2 py-2.5 text-right font-mono tabular-nums font-bold ${
                                   v == null || !Number.isFinite(v) ? "text-slate-600" : pctClass(v)
                                 }`}
                               >
                                 {fmtPct(v, 2)}
                               </td>
                             ))}
-                            <td className="whitespace-nowrap px-2 py-2.5 text-right">
+                            <td className="whitespace-nowrap overflow-hidden px-2 py-2.5 text-right">
                               <div className="flex items-center justify-end gap-1.5">
                                 <div className="h-1 w-6 overflow-hidden rounded-full bg-terminal-elevated/50">
                                   <div
@@ -3280,7 +3344,7 @@ const ScannerView = memo(function ScannerView({
                                 </span>
                               </div>
                             </td>
-                            <td className="max-w-[120px] truncate whitespace-nowrap px-2 py-2.5 text-right font-mono text-slate-600">
+                            <td className="max-w-[130px] truncate overflow-hidden whitespace-nowrap px-2 py-2.5 text-right font-mono text-slate-600">
                               —
                             </td>
                           </tr>
@@ -3315,13 +3379,13 @@ const ScannerView = memo(function ScannerView({
                                     });
                                   }}
                                 >
-                                  <td className="whitespace-nowrap px-2 py-2 text-right font-mono tabular-nums text-slate-600">
+                                  <td className="whitespace-nowrap overflow-hidden px-2 py-2 text-right font-mono tabular-nums text-slate-600">
                                     {cidx + 1}
                                   </td>
-                                  <td className="min-w-0 max-w-[280px] px-2 py-2 pl-6">
-                                    <div className="min-w-0 border-l border-slate-700 pl-3">
+                                  <td className="min-w-0 max-w-[240px] overflow-hidden px-2 py-2 pl-6">
+                                    <div className="min-w-0 max-w-[240px] border-l border-slate-700 pl-3">
                                       <p
-                                        className={`max-w-[260px] truncate font-medium ${industry.seed ? "italic text-slate-500" : "text-slate-100"}`}
+                                        className={`max-w-[240px] truncate font-medium ${industry.seed ? "italic text-slate-500" : "text-slate-100"}`}
                                       >
                                         {industry.theme}
                                         {industry.seed && (
@@ -3341,14 +3405,14 @@ const ScannerView = memo(function ScannerView({
                                   {[industry.perf1D, industry.perf1W, industry.perf1M, industry.perf3M, industry.perf6M].map((v, i) => (
                                     <td
                                       key={i}
-                                      className={`whitespace-nowrap px-2 py-2 text-right font-mono tabular-nums ${
+                                      className={`whitespace-nowrap overflow-hidden px-2 py-2 text-right font-mono tabular-nums ${
                                         v == null || !Number.isFinite(v) ? "text-slate-600" : pctClass(v)
                                       }`}
                                     >
                                       {fmtPct(v, 2)}
                                     </td>
                                   ))}
-                                  <td className="whitespace-nowrap px-2 py-2 text-right">
+                                  <td className="whitespace-nowrap overflow-hidden px-2 py-2 text-right">
                                     <div className="flex items-center justify-end gap-1.5">
                                       <div className="h-1 w-5 overflow-hidden rounded-full bg-terminal-elevated/50">
                                         <div
@@ -3364,7 +3428,7 @@ const ScannerView = memo(function ScannerView({
                                       </span>
                                     </div>
                                   </td>
-                                  <td className="max-w-[120px] truncate whitespace-nowrap px-2 py-2 text-right font-mono text-slate-300">
+                                  <td className="max-w-[130px] truncate overflow-hidden whitespace-nowrap px-2 py-2 text-right font-mono text-slate-300">
                                     {(industry.leaders ?? []).slice(0, 4).join(", ") || "—"}
                                   </td>
                                 </tr>
@@ -3396,7 +3460,7 @@ const ScannerView = memo(function ScannerView({
                         if (lbSortKey === "6m") return row.perf6M ?? -Infinity;
                         return -1;
                       };
-                      return val(b) - val(a);
+                      return lbSortMul * (val(b) - val(a));
                     });
                     return (
                       <Fragment key={parent}>
@@ -3408,10 +3472,10 @@ const ScannerView = memo(function ScannerView({
                           role="button"
                           aria-expanded={isOpen}
                         >
-                          <td className="whitespace-nowrap px-2 py-2.5 text-right font-mono tabular-nums text-slate-600">
+                          <td className="whitespace-nowrap overflow-hidden px-2 py-2.5 text-right font-mono tabular-nums text-slate-600">
                             {idx + 1}
                           </td>
-                          <td className="min-w-0 max-w-[280px] px-2 py-2.5">
+                          <td className="min-w-0 max-w-[240px] overflow-hidden px-2 py-2.5">
                             <div className="flex min-w-0 items-center gap-2">
                               <ChevronRight
                                 size={11}
@@ -3420,8 +3484,8 @@ const ScannerView = memo(function ScannerView({
                                 }`}
                                 aria-hidden
                               />
-                              <div className="min-w-0">
-                                <p className="max-w-[260px] truncate text-[12px] font-semibold text-slate-200">{parent}</p>
+                              <div className="min-w-0 max-w-[240px]">
+                                <p className="max-w-[240px] truncate text-[12px] font-semibold text-slate-200">{parent}</p>
                                 <p className="truncate t-micro text-slate-600">
                                   {rows.length} sub-industries · {totalStockCount} stocks
                                 </p>
@@ -3431,14 +3495,14 @@ const ScannerView = memo(function ScannerView({
                           {[avgPerf1D, avgPerf1W, avgPerf1M, avgPerf3M, avgPerf6M].map((v, i) => (
                             <td
                               key={i}
-                              className={`whitespace-nowrap px-2 py-2.5 text-right font-mono tabular-nums font-bold ${
+                              className={`whitespace-nowrap overflow-hidden px-2 py-2.5 text-right font-mono tabular-nums font-bold ${
                                 v == null || !Number.isFinite(v) ? "text-slate-600" : pctClass(v)
                               }`}
                             >
                               {fmtPct(v, 2)}
                             </td>
                           ))}
-                          <td className="whitespace-nowrap px-2 py-2.5 text-right">
+                          <td className="whitespace-nowrap overflow-hidden px-2 py-2.5 text-right">
                             <div className="flex items-center justify-end gap-1.5">
                               <div className="h-1 w-6 overflow-hidden rounded-full bg-terminal-elevated/50">
                                 <div
@@ -3454,7 +3518,7 @@ const ScannerView = memo(function ScannerView({
                               </span>
                             </div>
                           </td>
-                          <td className="max-w-[120px] truncate whitespace-nowrap px-2 py-2.5 text-right font-mono text-slate-600">
+                          <td className="max-w-[130px] truncate overflow-hidden whitespace-nowrap px-2 py-2.5 text-right font-mono text-slate-600">
                             —
                           </td>
                         </tr>
@@ -3479,13 +3543,13 @@ const ScannerView = memo(function ScannerView({
                                 }}
                                 title="Click to spotlight"
                               >
-                                <td className="whitespace-nowrap px-2 py-2 text-right font-mono tabular-nums text-slate-600">
+                                <td className="whitespace-nowrap overflow-hidden px-2 py-2 text-right font-mono tabular-nums text-slate-600">
                                   {cidx + 1}
                                 </td>
-                                <td className="min-w-0 max-w-[280px] px-2 py-2 pl-6">
-                                  <div className="min-w-0 border-l border-slate-700 pl-3">
+                                <td className="min-w-0 max-w-[240px] overflow-hidden px-2 py-2 pl-6">
+                                  <div className="min-w-0 max-w-[240px] border-l border-slate-700 pl-3">
                                     <p
-                                      className={`max-w-[260px] truncate font-medium ${row.seed ? "italic text-slate-500" : "text-slate-100"}`}
+                                      className={`max-w-[240px] truncate font-medium ${row.seed ? "italic text-slate-500" : "text-slate-100"}`}
                                     >
                                       {row.theme}
                                       {row.seed && (
@@ -3502,14 +3566,14 @@ const ScannerView = memo(function ScannerView({
                                 {[row.perf1D, row.perf1W, row.perf1M, row.perf3M, row.perf6M].map((v, i) => (
                                   <td
                                     key={i}
-                                    className={`whitespace-nowrap px-2 py-2 text-right font-mono tabular-nums ${
+                                    className={`whitespace-nowrap overflow-hidden px-2 py-2 text-right font-mono tabular-nums ${
                                       v == null || !Number.isFinite(v) ? "text-slate-600" : pctClass(v)
                                     }`}
                                   >
                                     {fmtPct(v, 2)}
                                   </td>
                                 ))}
-                                <td className="whitespace-nowrap px-2 py-2 text-right">
+                                <td className="whitespace-nowrap overflow-hidden px-2 py-2 text-right">
                                   <div className="flex items-center justify-end gap-1.5">
                                     <div className="h-1 w-5 overflow-hidden rounded-full bg-terminal-elevated/50">
                                       <div
@@ -3525,7 +3589,7 @@ const ScannerView = memo(function ScannerView({
                                     </span>
                                   </div>
                                 </td>
-                                <td className="max-w-[120px] truncate whitespace-nowrap px-2 py-2 text-right font-mono text-slate-300">
+                                <td className="max-w-[130px] truncate overflow-hidden whitespace-nowrap px-2 py-2 text-right font-mono text-slate-300">
                                   {(row.leaders ?? []).slice(0, 4).join(", ") || "—"}
                                 </td>
                               </tr>
@@ -3932,6 +3996,34 @@ const GappersView = memo(function GappersView({
 });
 
 export function ThemeDashboard() {
+  useEffect(() => {
+    const html = document.documentElement;
+    const body = document.body;
+    const root = document.getElementById("root");
+    const prevHtmlOverflow = html.style.overflow;
+    const prevBodyOverflow = body.style.overflow;
+    const prevBodyHeight = body.style.height;
+    const prevRootHeight = root?.style.height ?? "";
+    html.style.overflow = "auto";
+    body.style.overflow = "auto";
+    body.style.minHeight = "100%";
+    body.style.height = "auto";
+    if (root) {
+      root.style.height = "auto";
+      root.style.minHeight = "100%";
+    }
+    return () => {
+      html.style.overflow = prevHtmlOverflow;
+      body.style.overflow = prevBodyOverflow;
+      body.style.height = prevBodyHeight;
+      body.style.minHeight = "";
+      if (root) {
+        root.style.height = prevRootHeight;
+        root.style.minHeight = "";
+      }
+    };
+  }, []);
+
   const [tab, setTab] = useState<"scanner" | "gappers" | "breadth" | "rotation">("scanner");
   const [focusTicker, setFocusTicker] = useState<string | null>(null);
   const [focusTickerMeta, setFocusTickerMeta] = useState<TickerDrawerMeta | null>(null);
@@ -4081,8 +4173,9 @@ export function ThemeDashboard() {
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-terminal-bg text-slate-200">
-      <header className="shrink-0 border-b border-terminal-border bg-terminal-elevated px-4 py-3">
+    <div className="flex min-h-screen flex-col bg-terminal-bg text-slate-200">
+      <div className="sticky top-0 z-30 bg-terminal-bg">
+      <header className="border-b border-terminal-border bg-terminal-elevated px-4 py-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex min-w-0 items-center gap-2.5">
             <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-accent/15 text-accent">
@@ -4123,8 +4216,7 @@ export function ThemeDashboard() {
         </div>
       </header>
 
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-        <nav className="shrink-0 border-b border-terminal-border bg-terminal-bg pl-4 pr-[42px] py-3" aria-label="Workspace tabs">
+        <nav className="border-b border-terminal-border bg-terminal-bg pl-4 pr-[42px] py-3" aria-label="Workspace tabs">
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
@@ -4305,6 +4397,7 @@ export function ThemeDashboard() {
             </div>
           </div>
         </nav>
+      </div>
 
         {watchActionErr ? (
           <div className="shrink-0 border-b border-rose-900/40 bg-rose-950/35 px-4 py-2 text-center text-xs font-medium text-rose-200">
@@ -4314,12 +4407,12 @@ export function ThemeDashboard() {
 
         <main
           id="main-content"
-          className="flex min-h-0 min-w-0 flex-1 flex-row overflow-x-auto overflow-y-auto"
+          className="flex w-full min-w-0 flex-1 flex-row"
           aria-label="Dashboard workspace"
         >
-          <div className="flex h-full min-h-0 min-w-0 flex-1 basis-0 flex-col overflow-hidden bg-terminal-bg p-0">
+          <div className="flex min-w-0 flex-1 basis-0 flex-col bg-terminal-bg p-0">
             {tab === "scanner" ? (
-              <div className="flex max-h-[calc(100vh-7.75rem)] min-h-0 min-w-0 flex-1 flex-col overflow-hidden p-4">
+              <div className="flex min-w-0 flex-1 flex-col p-4">
                 <BreakingRiskBanner state={payload?.market_momentum_score?.state} message={payload?.market_momentum_score?.message} />
 
                 {payload ? (
@@ -4407,7 +4500,6 @@ export function ThemeDashboard() {
             />
           ) : null}
         </main>
-      </div>
     </div>
   );
 }
