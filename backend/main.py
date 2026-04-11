@@ -876,6 +876,99 @@ async def get_market_breadth() -> dict:
     return base
 
 
+@app.get("/api/market-breadth/stocks")
+async def get_market_breadth_stocks(
+    filter: str = "up4",
+    min_cap_b: float = 1.0,
+) -> dict:
+    """
+    Drill-down stock list for a Stockbee breadth filter.
+
+    Query params:
+      filter    — one of: up4, dn4, up25q, dn25q, up25m, dn25m, up50m, dn50m, up13_34, dn13_34
+      min_cap_b — minimum market cap in billions (default 1.0)
+
+    Returns up to 500 stocks sorted by change_pct (desc for up* filters, asc for dn*).
+    Each stock includes ticker, company, market_cap_b, price, change_pct,
+    dollar_volume, adr_pct, and industry.
+    Cached per (filter, date_et) with 30-min TTL pre-close, 4-hour TTL post-close.
+    """
+    try:
+        from backend.breadth_stocks import fetch_breadth_stock_list as _fetch, VALID_FILTERS
+    except ImportError:
+        from breadth_stocks import fetch_breadth_stock_list as _fetch, VALID_FILTERS
+
+    if filter not in VALID_FILTERS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"filter must be one of: {', '.join(sorted(VALID_FILTERS))}",
+        )
+
+    try:
+        stocks = await _fetch(filter, min_cap_b)
+    except Exception as exc:
+        logger.error("get_market_breadth_stocks failed: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    return {
+        "ok": True,
+        "filter": filter,
+        "min_cap_b": min_cap_b,
+        "count": len(stocks),
+        "stocks": stocks,
+        "fetched_at_utc": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+    }
+
+
+@app.get("/api/market-breadth/stocks/grouped")
+async def get_market_breadth_stocks_grouped(
+    filter: str = "up4",
+    min_cap_b: float = 1.0,
+) -> dict:
+    """
+    Same data as /api/market-breadth/stocks but collapsed into leaderboard parent-sector
+    groups (Technology, Healthcare, Energy, …) matching the Leaderboard Industry tab.
+
+    Each group includes count, avg_change_pct, all tickers, and a sub_industries breakdown
+    by Finviz industry + thematic label. Groups sorted by count descending.
+    """
+    try:
+        from backend.breadth_stocks import (
+            fetch_breadth_stock_list as _fetch,
+            group_stocks_by_parent as _group,
+            VALID_FILTERS,
+        )
+    except ImportError:
+        from breadth_stocks import (  # type: ignore[no-redef]
+            fetch_breadth_stock_list as _fetch,
+            group_stocks_by_parent as _group,
+            VALID_FILTERS,
+        )
+
+    if filter not in VALID_FILTERS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"filter must be one of: {', '.join(sorted(VALID_FILTERS))}",
+        )
+
+    try:
+        stocks = await _fetch(filter, min_cap_b)
+    except Exception as exc:
+        logger.error("get_market_breadth_stocks_grouped failed: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    groups = _group(stocks)
+
+    return {
+        "ok": True,
+        "filter": filter,
+        "min_cap_b": min_cap_b,
+        "total_count": len(stocks),
+        "groups": groups,
+        "fetched_at_utc": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+    }
+
+
 @app.get("/api/market-breadth/ext")
 async def get_market_breadth_ext() -> dict:
     """
