@@ -107,7 +107,18 @@ def _pick_year_gid() -> tuple[int, str]:
 
 
 def _row_to_record(cells: list[str]) -> dict[str, Any] | None:
-    """Expect Stockbee layout: [row#, date, up4, down4, ...]."""
+    """
+    Parse one Stockbee spreadsheet row.
+
+    Column layout (1-indexed after row# at cells[0]):
+      Old layout (17 cols total): ..., dn13_34d[13], worden_universe[14], t2108[15], sp[16]
+      New layout (19+ cols):      ..., dn13_34d[13], atr_10x[14], above50pct[15],
+                                       worden_universe[16], t2108[17], sp[18]
+
+    The new columns are added by the spreadsheet owner when they extend it.
+    If the sheet only has 17 cols we still parse correctly, returning None for the new fields.
+    The backend also injects computed values via breadth_ext.py for the current trading day.
+    """
     if len(cells) < 17:
         return None
     date_raw = cells[1].strip()
@@ -118,13 +129,26 @@ def _row_to_record(cells: list[str]) -> dict[str, Any] | None:
         return None
     date_iso = dt.date().isoformat()
 
-    t2108_raw = cells[15].strip().replace("%", "")
+    # Detect whether the sheet has the extended columns (19+ cells per row)
+    extended = len(cells) >= 19
+
+    if extended:
+        atr_10x_ext: int | None = _int_cell(cells[14])
+        above_50dma_pct: float | None = _num_cell(cells[15])
+        worden_universe: int | None = _int_cell(cells[16])
+        t2108_raw = cells[17].strip().replace("%", "")
+        sp = _num_cell(cells[18])
+    else:
+        atr_10x_ext = None
+        above_50dma_pct = None
+        worden_universe = _int_cell(cells[14])
+        t2108_raw = cells[15].strip().replace("%", "")
+        sp = _num_cell(cells[16])
+
     try:
-        t2108 = float(t2108_raw) if t2108_raw else None
+        t2108: float | None = float(t2108_raw) if t2108_raw else None
     except ValueError:
         t2108 = None
-
-    sp = _num_cell(cells[16])
 
     return {
         "date": date_iso,
@@ -141,7 +165,9 @@ def _row_to_record(cells: list[str]) -> dict[str, Any] | None:
         "down_50_m": _int_cell(cells[11]),
         "up_13_34d": _int_cell(cells[12]),
         "down_13_34d": _int_cell(cells[13]),
-        "worden_universe": _int_cell(cells[14]),
+        "atr_10x_ext": atr_10x_ext,       # computed by breadth_ext.py for today; None for history
+        "above_50dma_pct": above_50dma_pct, # same
+        "worden_universe": worden_universe,
         "t2108": t2108,
         "sp_index": sp,
     }
