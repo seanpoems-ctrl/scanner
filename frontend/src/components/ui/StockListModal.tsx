@@ -14,6 +14,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { createPortal } from "react-dom";
 import {
   ChevronDown,
   ChevronRight,
@@ -513,22 +514,17 @@ export default function StockListModal({
     return () => { abortRef.current?.abort(); };
   }, [open, fetchData]);
 
-  // Body scroll lock
-  useEffect(() => {
-    if (open) {
-      document.body.classList.add("overflow-hidden");
-    } else {
-      document.body.classList.remove("overflow-hidden");
-    }
-    return () => { document.body.classList.remove("overflow-hidden"); };
-  }, [open]);
-
-  // Escape key
+  // Scroll lock + Escape key — single effect, restores previous overflow value
   useEffect(() => {
     if (!open) return;
-    const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.body.style.overflow = prev;
+      window.removeEventListener("keydown", onKey);
+    };
   }, [open, onClose]);
 
   // Per-item copy with tooltip
@@ -579,22 +575,23 @@ export default function StockListModal({
     };
   }, []);
 
-  if (!open) return null;
+  if (typeof document === "undefined" || !open) return null;
 
-  return (
-    /* Overlay */
+  return createPortal(
+    /* Overlay — fixed inset-0 z-[200], covers everything including site header */
     <div
-      className="fixed inset-0 z-50 bg-black/60"
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      className="fixed inset-0 z-[200] bg-black/70"
+      onClick={onClose}
     >
-      {/* Panel */}
+      {/* Panel — z-[210] so it sits above the overlay */}
       <div
-        className="fixed left-1/2 top-1/2 flex max-h-[85vh] w-[min(92vw,700px)]
-          -translate-x-1/2 -translate-y-1/2 flex-col rounded-xl border
+        className="fixed left-1/2 top-1/2 z-[210] flex w-[min(92vw,700px)] max-h-[85vh]
+          -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-xl border
           border-terminal-border bg-terminal-bg shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
       >
-        {/* ── Header ── */}
-        <div className="flex shrink-0 items-center gap-3 border-b border-terminal-border px-4 py-3">
+        {/* ── Header — shrink-0 keeps it pinned while list scrolls ── */}
+        <div className="shrink-0 flex items-center gap-3 border-b border-terminal-border px-4 py-3">
           <div className="flex-1 min-w-0">
             <p className="truncate text-sm font-semibold text-slate-100">{filterLabel}</p>
             {!loading && (
@@ -640,8 +637,8 @@ export default function StockListModal({
           </button>
         </div>
 
-        {/* ── Body ── */}
-        <div className="flex-1 overflow-y-auto">
+        {/* ── Body — flex-1 min-h-0 so max-h on parent is respected ── */}
+        <div className="flex-1 min-h-0 overflow-y-auto">
           {loading ? (
             <SkeletonRows count={3} />
           ) : error ? (
@@ -663,6 +660,7 @@ export default function StockListModal({
           )}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
