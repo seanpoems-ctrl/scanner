@@ -1,7 +1,8 @@
-import { memo, useMemo } from "react";
+import { memo, useMemo, useState } from "react";
 import { BarChart3, ExternalLink } from "lucide-react";
 import { ImpactBadge } from "./ui/ImpactBadge";
 import { PanelLoading } from "./ui/SkeletonRows";
+import StockListModal, { type FilterKey } from "./ui/StockListModal";
 
 export type StockbeeRow = {
   date: string;
@@ -52,7 +53,23 @@ function t2108Label(v: number | null): { text: string; badge: string } {
 }
 
 const MarketBreadthReport = memo(function MarketBreadthReport({ data }: { data: MarketBreadthPayload | null }) {
+  const [modalFilter, setModalFilter] = useState<FilterKey | null>(null);
+  const [modalLabel, setModalLabel] = useState<string>("");
+
   const latest = data?.rows?.[0] ?? null;
+
+  const CLICKABLE_COLS: Record<number, { filter: FilterKey; label: string }> = {
+    1:  { filter: "up4",     label: "Up 4%+ Today" },
+    2:  { filter: "dn4",     label: "Down 4%+ Today" },
+    5:  { filter: "up25q",   label: "Up 25%+ Quarterly" },
+    6:  { filter: "dn25q",   label: "Down 25%+ Quarterly" },
+    7:  { filter: "up25m",   label: "Up 25%+ Monthly" },
+    8:  { filter: "dn25m",   label: "Down 25%+ Monthly" },
+    9:  { filter: "up50m",   label: "Up 50%+ Monthly" },
+    10: { filter: "dn50m",   label: "Down 50%+ Monthly" },
+    11: { filter: "up13_34", label: "Up 13%+ 34d" },
+    12: { filter: "dn13_34", label: "Down 13%+ 34d" },
+  };
 
   const analysis = useMemo(() => {
     if (!latest) return null;
@@ -166,11 +183,18 @@ const MarketBreadthReport = memo(function MarketBreadthReport({ data }: { data: 
               </tr>
             </thead>
             <tbody>
-              {(data.rows ?? []).map((r) => {
+              {(data.rows ?? []).map((r, rowIndex) => {
+                const isLatest = rowIndex === 0;
                 const bearishRow =
                   r.up_25_q != null && r.down_25_q != null && r.up_25_q < r.down_25_q;
                 const up4hi = r.up_4_pct != null && r.up_4_pct > 600;
                 const t2108Low = r.t2108 != null && r.t2108 < 20;
+
+                const clickCls = (colIdx: number, base: string) => {
+                  if (!isLatest || !CLICKABLE_COLS[colIdx]) return base;
+                  return `${base} cursor-pointer underline decoration-dotted underline-offset-2 hover:text-white`;
+                };
+
                 return (
                   <tr
                     key={r.date}
@@ -183,71 +207,115 @@ const MarketBreadthReport = memo(function MarketBreadthReport({ data }: { data: 
                       {r.date_display}
                     </td>
 
-                    {/* Up 4%+ */}
-                    <td className={`px-1 py-1 text-right t-mono whitespace-nowrap ${up4hi ? "text-emerald-300 font-semibold" : ""}`}>
+                    {/* Up 4%+ — col 1, clickable on latest */}
+                    <td
+                      className={clickCls(1, `px-1 py-1 text-right t-mono whitespace-nowrap ${up4hi ? "text-emerald-300 font-semibold" : ""}`)}
+                      {...(isLatest && CLICKABLE_COLS[1] ? { onClick: () => { setModalFilter(CLICKABLE_COLS[1].filter); setModalLabel(CLICKABLE_COLS[1].label); } } : {})}
+                    >
                       {fmtN(r.up_4_pct)}
                     </td>
 
-                    {/* Dn 4%+ */}
-                    <td className="px-1 py-1 text-right t-mono whitespace-nowrap">
+                    {/* Dn 4%+ — col 2, clickable on latest */}
+                    <td
+                      className={clickCls(2, "px-1 py-1 text-right t-mono whitespace-nowrap")}
+                      {...(isLatest && CLICKABLE_COLS[2] ? { onClick: () => { setModalFilter(CLICKABLE_COLS[2].filter); setModalLabel(CLICKABLE_COLS[2].label); } } : {})}
+                    >
                       {fmtN(r.down_4_pct)}
                     </td>
 
-                    {/* 5d R */}
+                    {/* 5d R — col 3, not clickable */}
                     <td className="px-1 py-1 text-right t-mono whitespace-nowrap">{fmtN(r.ratio_5d)}</td>
 
-                    {/* 10d R */}
+                    {/* 10d R — col 4, not clickable */}
                     <td className="px-1 py-1 text-right t-mono whitespace-nowrap">{fmtN(r.ratio_10d)}</td>
 
-                    {/* Up 25% Q */}
-                    <td className="px-1 py-1 text-right t-mono whitespace-nowrap">{fmtN(r.up_25_q)}</td>
+                    {/* Up 25% Q — col 5, clickable on latest */}
+                    <td
+                      className={clickCls(5, "px-1 py-1 text-right t-mono whitespace-nowrap")}
+                      {...(isLatest && CLICKABLE_COLS[5] ? { onClick: () => { setModalFilter(CLICKABLE_COLS[5].filter); setModalLabel(CLICKABLE_COLS[5].label); } } : {})}
+                    >
+                      {fmtN(r.up_25_q)}
+                    </td>
 
-                    {/* Dn 25% Q */}
-                    <td className={`px-1 py-1 text-right t-mono whitespace-nowrap ${bearishRow ? "text-rose-400" : ""}`}>
+                    {/* Dn 25% Q — col 6, clickable on latest */}
+                    <td
+                      className={clickCls(6, `px-1 py-1 text-right t-mono whitespace-nowrap ${bearishRow ? "text-rose-400" : ""}`)}
+                      {...(isLatest && CLICKABLE_COLS[6] ? { onClick: () => { setModalFilter(CLICKABLE_COLS[6].filter); setModalLabel(CLICKABLE_COLS[6].label); } } : {})}
+                    >
                       {fmtN(r.down_25_q)}
                     </td>
 
-                    {/* Up 25% M */}
-                    <td className="px-1 py-1 text-right t-mono whitespace-nowrap">{fmtN(r.up_25_m)}</td>
+                    {/* Up 25% M — col 7, clickable on latest */}
+                    <td
+                      className={clickCls(7, "px-1 py-1 text-right t-mono whitespace-nowrap")}
+                      {...(isLatest && CLICKABLE_COLS[7] ? { onClick: () => { setModalFilter(CLICKABLE_COLS[7].filter); setModalLabel(CLICKABLE_COLS[7].label); } } : {})}
+                    >
+                      {fmtN(r.up_25_m)}
+                    </td>
 
-                    {/* Dn 25% M */}
-                    <td className="px-1 py-1 text-right t-mono whitespace-nowrap">{fmtN(r.down_25_m)}</td>
+                    {/* Dn 25% M — col 8, clickable on latest */}
+                    <td
+                      className={clickCls(8, "px-1 py-1 text-right t-mono whitespace-nowrap")}
+                      {...(isLatest && CLICKABLE_COLS[8] ? { onClick: () => { setModalFilter(CLICKABLE_COLS[8].filter); setModalLabel(CLICKABLE_COLS[8].label); } } : {})}
+                    >
+                      {fmtN(r.down_25_m)}
+                    </td>
 
-                    {/* Up 50% M */}
-                    <td className="px-1 py-1 text-right t-mono whitespace-nowrap">{fmtN(r.up_50_m)}</td>
+                    {/* Up 50% M — col 9, clickable on latest */}
+                    <td
+                      className={clickCls(9, "px-1 py-1 text-right t-mono whitespace-nowrap")}
+                      {...(isLatest && CLICKABLE_COLS[9] ? { onClick: () => { setModalFilter(CLICKABLE_COLS[9].filter); setModalLabel(CLICKABLE_COLS[9].label); } } : {})}
+                    >
+                      {fmtN(r.up_50_m)}
+                    </td>
 
-                    {/* Dn 50% M */}
-                    <td className="px-1 py-1 text-right t-mono whitespace-nowrap">{fmtN(r.down_50_m)}</td>
+                    {/* Dn 50% M — col 10, clickable on latest */}
+                    <td
+                      className={clickCls(10, "px-1 py-1 text-right t-mono whitespace-nowrap")}
+                      {...(isLatest && CLICKABLE_COLS[10] ? { onClick: () => { setModalFilter(CLICKABLE_COLS[10].filter); setModalLabel(CLICKABLE_COLS[10].label); } } : {})}
+                    >
+                      {fmtN(r.down_50_m)}
+                    </td>
 
-                    {/* Up 13% 34d */}
-                    <td className="px-1 py-1 text-right t-mono whitespace-nowrap">{fmtN(r.up_13_34d)}</td>
+                    {/* Up 13% 34d — col 11, clickable on latest */}
+                    <td
+                      className={clickCls(11, "px-1 py-1 text-right t-mono whitespace-nowrap")}
+                      {...(isLatest && CLICKABLE_COLS[11] ? { onClick: () => { setModalFilter(CLICKABLE_COLS[11].filter); setModalLabel(CLICKABLE_COLS[11].label); } } : {})}
+                    >
+                      {fmtN(r.up_13_34d)}
+                    </td>
 
-                    {/* Dn 13% 34d */}
-                    <td className="px-1 py-1 text-right t-mono whitespace-nowrap">{fmtN(r.down_13_34d)}</td>
+                    {/* Dn 13% 34d — col 12, clickable on latest */}
+                    <td
+                      className={clickCls(12, "px-1 py-1 text-right t-mono whitespace-nowrap")}
+                      {...(isLatest && CLICKABLE_COLS[12] ? { onClick: () => { setModalFilter(CLICKABLE_COLS[12].filter); setModalLabel(CLICKABLE_COLS[12].label); } } : {})}
+                    >
+                      {fmtN(r.down_13_34d)}
+                    </td>
 
-                    {/* 10x ATR Ext — purple; null for historical rows */}
+                    {/* 10x ATR Ext — col 13, purple; null for historical rows */}
                     <td className="px-1 py-1 text-right t-mono text-purple-300 whitespace-nowrap">
                       {r.atr_10x_ext != null ? fmtN(r.atr_10x_ext) : <span className="text-slate-600">—</span>}
                     </td>
 
-                    {/* >50 DMA — sky blue; null for historical rows */}
+                    {/* >50 DMA — col 14, sky blue; null for historical rows */}
                     <td className="px-1 py-1 text-right t-mono text-sky-300 whitespace-nowrap">
                       {r.above_50dma_pct != null
                         ? `${r.above_50dma_pct.toFixed(1)}%`
                         : <span className="text-slate-600">—</span>}
                     </td>
 
-                    {/* Share Universe — amber (was "Univ") */}
+                    {/* Share Universe — col 15, amber */}
                     <td className="px-1 py-1 text-right t-mono text-amber-300 whitespace-nowrap">
                       {fmtN(r.worden_universe)}
                     </td>
 
-                    {/* T2108 — amber, red when < 20 */}
+                    {/* T2108 — col 16, amber, red when < 20 */}
                     <td className={`px-1 py-1 text-right t-mono whitespace-nowrap ${t2108Low ? "text-rose-400 font-semibold" : "text-amber-300"}`}>
                       {fmtN(r.t2108)}
                     </td>
 
-                    {/* S&P — amber */}
+                    {/* S&P — col 17, amber */}
                     <td className="px-1 py-1 text-right t-mono text-amber-300 whitespace-nowrap">
                       {fmtN(r.sp_index)}
                     </td>
@@ -340,6 +408,17 @@ const MarketBreadthReport = memo(function MarketBreadthReport({ data }: { data: 
           </p>
         </div>
       </div>
+
+      {/* Drill-down modal */}
+      {modalFilter !== null && (
+        <StockListModal
+          open={true}
+          filter={modalFilter}
+          filterLabel={modalLabel}
+          minCapB={1.0}
+          onClose={() => setModalFilter(null)}
+        />
+      )}
     </div>
   );
 });
