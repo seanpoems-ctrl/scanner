@@ -3,6 +3,7 @@ import { AlertTriangle, BarChart2, BarChart3, ChevronRight, Info, LayoutGrid, Li
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import MarketBreadth from "./MarketBreadth";
 import { useWatchlist } from "../hooks/useWatchlist";
+import { useIbkrStatus } from "../hooks/useIbkrStatus";
 import { API_BASE_URL } from "../lib/apiBase";
 import { formatMoney, fmtPct, fmtPrice, pctClass } from "../lib/formatters";
 import { RotationView } from "./RotationView";
@@ -4237,6 +4238,7 @@ export function ThemeDashboard() {
     updateNote,
   } = useWatchlist();
   const marketStatus = useMarketStatus();
+  const ibkr = useIbkrStatus();
   const { payload, error, reload: reloadThemes, lastUpdatedAt, loading, loadingSince, pollMs } = useThemesPayload();
   // Legacy RSS-based briefs kept alive for data continuity (not rendered in main UI).
   usePremarketBrief();
@@ -4392,6 +4394,24 @@ export function ThemeDashboard() {
                 <TapeInline tape={payload?.tape} />
               </div>
             </div>
+            {/* IBKR data source badge */}
+            {!ibkr.checking && (
+              <div
+                title={ibkr.live
+                  ? "Connected to IBKR Client Portal — real-time data"
+                  : (ibkr.error ?? "IBKR gateway not running — showing delayed data")}
+                className={`hidden items-center gap-1.5 rounded-lg border px-2.5 py-1.5 sm:flex ${
+                  ibkr.live
+                    ? "border-emerald-600/40 bg-emerald-950/60 text-emerald-400"
+                    : "border-amber-700/40 bg-amber-950/60 text-amber-400"
+                }`}
+              >
+                <span className={`inline-flex h-1.5 w-1.5 rounded-full ${ibkr.live ? "bg-emerald-400" : "bg-amber-400"}`} />
+                <span className="font-mono text-[10px] font-semibold tracking-wide">
+                  {ibkr.live ? "LIVE · IBKR" : "DELAYED · 15 min"}
+                </span>
+              </div>
+            )}
             <div className="ml-auto hidden items-center gap-3 rounded-xl border border-terminal-border bg-terminal-bg px-3 py-2 sm:flex">
               <div className="flex flex-col leading-tight">
                 <span className="flex items-center gap-2 t-label">
