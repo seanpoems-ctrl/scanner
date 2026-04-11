@@ -409,14 +409,14 @@ const MarketBreadthReport = memo(function MarketBreadthReport({ data }: { data: 
         </div>
       </div>
 
-      {/* Drill-down modal */}
+      {/* Drill-down modal — only mounted when a filter is selected */}
       {modalFilter !== null && (
         <StockListModal
-          open={true}
+          open={modalFilter !== null}
           filter={modalFilter}
           filterLabel={modalLabel}
           minCapB={1.0}
-          onClose={() => setModalFilter(null)}
+          onClose={() => { setModalFilter(null); setModalLabel(""); }}
         />
       )}
     </div>
