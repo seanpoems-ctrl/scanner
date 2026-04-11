@@ -18,6 +18,8 @@ export type StockbeeRow = {
   down_50_m: number | null;
   up_13_34d: number | null;
   down_13_34d: number | null;
+  atr_10x_ext: number | null;        // count of up4%+ stocks ≥10×ATR from 50-SMA
+  above_50dma_pct: number | null;    // % of up4%+ stocks above their 50-day SMA
   worden_universe: number | null;
   t2108: number | null;
   sp_index: number | null;
@@ -139,26 +141,28 @@ const MarketBreadthReport = memo(function MarketBreadthReport({ data }: { data: 
       <div className="flex flex-col gap-4 p-4 lg:flex-row">
         {/* LEFT: table ~65% */}
         <div className="min-w-0 flex-[1_1_65%] overflow-x-auto">
-          <table className="w-full min-w-[720px] border-collapse text-left">
+          <table className="w-full min-w-[1040px] border-collapse text-left">
             <caption className="sr-only">Stockbee market monitor historical rows by date.</caption>
             <thead>
               <tr className="border-b border-gray-800">
-                <th scope="col" className="sticky left-0 z-10 bg-terminal-bg py-2 pr-2 t-label">Date</th>
-                <th scope="col" className="px-1 py-2 t-label">Up 4%+</th>
-                <th scope="col" className="px-1 py-2 t-label">Dn 4%+</th>
-                <th scope="col" className="px-1 py-2 t-label">5d R</th>
-                <th scope="col" className="px-1 py-2 t-label">10d R</th>
-                <th scope="col" className="px-1 py-2 t-label">Up 25% Q</th>
-                <th scope="col" className="px-1 py-2 t-label">Dn 25% Q</th>
-                <th scope="col" className="px-1 py-2 t-label">Up 25% M</th>
-                <th scope="col" className="px-1 py-2 t-label">Dn 25% M</th>
-                <th scope="col" className="px-1 py-2 t-label">Up 50% M</th>
-                <th scope="col" className="px-1 py-2 t-label">Dn 50% M</th>
-                <th scope="col" className="px-1 py-2 t-label">Up 13% 34d</th>
-                <th scope="col" className="px-1 py-2 t-label">Dn 13% 34d</th>
-                <th scope="col" className="px-1 py-2 t-label">Univ</th>
-                <th scope="col" className="px-1 py-2 t-label">T2108</th>
-                <th scope="col" className="px-1 py-2 t-label">S&amp;P</th>
+                <th scope="col" className="sticky left-0 z-10 bg-terminal-bg py-2 pr-3 t-label text-emerald-400 whitespace-nowrap">Date</th>
+                <th scope="col" className="px-1 py-2 t-label text-emerald-400 whitespace-nowrap">Up 4%+</th>
+                <th scope="col" className="px-1 py-2 t-label text-emerald-400 whitespace-nowrap">Dn 4%+</th>
+                <th scope="col" className="px-1 py-2 t-label text-emerald-400 whitespace-nowrap">5d R</th>
+                <th scope="col" className="px-1 py-2 t-label text-emerald-400 whitespace-nowrap">10d R</th>
+                <th scope="col" className="px-1 py-2 t-label text-emerald-400 whitespace-nowrap">Up 25% Q</th>
+                <th scope="col" className="px-1 py-2 t-label text-emerald-400 whitespace-nowrap">Dn 25% Q</th>
+                <th scope="col" className="px-1 py-2 t-label text-emerald-400 whitespace-nowrap">Up 25% M</th>
+                <th scope="col" className="px-1 py-2 t-label text-emerald-400 whitespace-nowrap">Dn 25% M</th>
+                <th scope="col" className="px-1 py-2 t-label text-emerald-400 whitespace-nowrap">Up 50% M</th>
+                <th scope="col" className="px-1 py-2 t-label text-emerald-400 whitespace-nowrap">Dn 50% M</th>
+                <th scope="col" className="px-1 py-2 t-label text-emerald-400 whitespace-nowrap">Up 13% 34d</th>
+                <th scope="col" className="px-1 py-2 t-label text-emerald-400 whitespace-nowrap">Dn 13% 34d</th>
+                <th scope="col" className="px-1 py-2 t-label text-purple-400 whitespace-nowrap">10x ATR Ext</th>
+                <th scope="col" className="px-1 py-2 t-label text-sky-400 whitespace-nowrap">&gt;50 DMA</th>
+                <th scope="col" className="px-1 py-2 t-label text-amber-400 whitespace-nowrap">Share Universe</th>
+                <th scope="col" className="px-1 py-2 t-label text-amber-400 whitespace-nowrap">T2108</th>
+                <th scope="col" className="px-1 py-2 t-label text-amber-400 whitespace-nowrap">S&amp;P</th>
               </tr>
             </thead>
             <tbody>
@@ -174,37 +178,79 @@ const MarketBreadthReport = memo(function MarketBreadthReport({ data }: { data: 
                       bearishRow ? "text-rose-200/70" : "text-slate-300"
                     }`}
                   >
-                    <td className="sticky left-0 z-10 bg-terminal-bg py-1.5 pr-2 text-slate-200">{r.date_display}</td>
-                    <td
-                      className={`px-1 py-1.5 ${
-                        up4hi
-                          ? "font-bold text-emerald-300 shadow-[0_0_12px_rgba(52,211,153,0.35)]"
-                          : ""
-                      }`}
-                    >
+                    {/* Date — sticky */}
+                    <td className="sticky left-0 z-10 bg-terminal-bg py-1 pr-3 t-mono whitespace-nowrap">
+                      {r.date_display}
+                    </td>
+
+                    {/* Up 4%+ */}
+                    <td className={`px-1 py-1 text-right t-mono whitespace-nowrap ${up4hi ? "text-emerald-300 font-semibold" : ""}`}>
                       {fmtN(r.up_4_pct)}
                     </td>
-                    <td className="px-1 py-1.5">{fmtN(r.down_4_pct)}</td>
-                    <td className="px-1 py-1.5">{fmtN(r.ratio_5d)}</td>
-                    <td className="px-1 py-1.5">{fmtN(r.ratio_10d)}</td>
-                    <td className="px-1 py-1.5">{fmtN(r.up_25_q)}</td>
-                    <td className="px-1 py-1.5">{fmtN(r.down_25_q)}</td>
-                    <td className="px-1 py-1.5">{fmtN(r.up_25_m)}</td>
-                    <td className="px-1 py-1.5">{fmtN(r.down_25_m)}</td>
-                    <td className="px-1 py-1.5">{fmtN(r.up_50_m)}</td>
-                    <td className="px-1 py-1.5">{fmtN(r.down_50_m)}</td>
-                    <td className="px-1 py-1.5">{fmtN(r.up_13_34d)}</td>
-                    <td className="px-1 py-1.5">{fmtN(r.down_13_34d)}</td>
-                    <td className="px-1 py-1.5">{fmtN(r.worden_universe)}</td>
-                    <td
-                      className={`px-1 py-1.5 ${
-                        t2108Low ? "rounded bg-orange-950/50 font-bold text-orange-300" : ""
-                      }`}
-                    >
-                      {r.t2108 != null ? r.t2108.toFixed(2) : "—"}
-                      {t2108Low ? <span className="ml-1 text-[10px] text-orange-400">OS</span> : null}
+
+                    {/* Dn 4%+ */}
+                    <td className="px-1 py-1 text-right t-mono whitespace-nowrap">
+                      {fmtN(r.down_4_pct)}
                     </td>
-                    <td className="px-1 py-1.5">{r.sp_index != null ? r.sp_index.toLocaleString() : "—"}</td>
+
+                    {/* 5d R */}
+                    <td className="px-1 py-1 text-right t-mono whitespace-nowrap">{fmtN(r.ratio_5d)}</td>
+
+                    {/* 10d R */}
+                    <td className="px-1 py-1 text-right t-mono whitespace-nowrap">{fmtN(r.ratio_10d)}</td>
+
+                    {/* Up 25% Q */}
+                    <td className="px-1 py-1 text-right t-mono whitespace-nowrap">{fmtN(r.up_25_q)}</td>
+
+                    {/* Dn 25% Q */}
+                    <td className={`px-1 py-1 text-right t-mono whitespace-nowrap ${bearishRow ? "text-rose-400" : ""}`}>
+                      {fmtN(r.down_25_q)}
+                    </td>
+
+                    {/* Up 25% M */}
+                    <td className="px-1 py-1 text-right t-mono whitespace-nowrap">{fmtN(r.up_25_m)}</td>
+
+                    {/* Dn 25% M */}
+                    <td className="px-1 py-1 text-right t-mono whitespace-nowrap">{fmtN(r.down_25_m)}</td>
+
+                    {/* Up 50% M */}
+                    <td className="px-1 py-1 text-right t-mono whitespace-nowrap">{fmtN(r.up_50_m)}</td>
+
+                    {/* Dn 50% M */}
+                    <td className="px-1 py-1 text-right t-mono whitespace-nowrap">{fmtN(r.down_50_m)}</td>
+
+                    {/* Up 13% 34d */}
+                    <td className="px-1 py-1 text-right t-mono whitespace-nowrap">{fmtN(r.up_13_34d)}</td>
+
+                    {/* Dn 13% 34d */}
+                    <td className="px-1 py-1 text-right t-mono whitespace-nowrap">{fmtN(r.down_13_34d)}</td>
+
+                    {/* 10x ATR Ext — purple; null for historical rows */}
+                    <td className="px-1 py-1 text-right t-mono text-purple-300 whitespace-nowrap">
+                      {r.atr_10x_ext != null ? fmtN(r.atr_10x_ext) : <span className="text-slate-600">—</span>}
+                    </td>
+
+                    {/* >50 DMA — sky blue; null for historical rows */}
+                    <td className="px-1 py-1 text-right t-mono text-sky-300 whitespace-nowrap">
+                      {r.above_50dma_pct != null
+                        ? `${r.above_50dma_pct.toFixed(1)}%`
+                        : <span className="text-slate-600">—</span>}
+                    </td>
+
+                    {/* Share Universe — amber (was "Univ") */}
+                    <td className="px-1 py-1 text-right t-mono text-amber-300 whitespace-nowrap">
+                      {fmtN(r.worden_universe)}
+                    </td>
+
+                    {/* T2108 — amber, red when < 20 */}
+                    <td className={`px-1 py-1 text-right t-mono whitespace-nowrap ${t2108Low ? "text-rose-400 font-semibold" : "text-amber-300"}`}>
+                      {fmtN(r.t2108)}
+                    </td>
+
+                    {/* S&P — amber */}
+                    <td className="px-1 py-1 text-right t-mono text-amber-300 whitespace-nowrap">
+                      {fmtN(r.sp_index)}
+                    </td>
                   </tr>
                 );
               })}

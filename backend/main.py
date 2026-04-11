@@ -844,6 +844,28 @@ async def get_market_breadth() -> dict:
         from stockbee_breadth import fetch_stockbee_market_monitor_sync as _fetch_sb
 
     base = await asyncio.to_thread(_fetch_sb)
+
+    # Attach post-close computed columns (ATR 10x ext + >50dma) to today's row only.
+    # These are expensive yfinance computations — results are date-cached in breadth_ext.
+    try:
+        try:
+            from backend.breadth_ext import get_breadth_ext_today as _get_ext
+        except ImportError:
+            from breadth_ext import get_breadth_ext_today as _get_ext
+
+        ext = await _get_ext()
+        ext_date = ext.get("computed_date", "")
+        rows = base.get("rows") or []
+        if rows and ext_date:
+            # Only inject into the row whose date matches today's computed date
+            for row in rows:
+                if row.get("date") == ext_date:
+                    row["atr_10x_ext"] = ext.get("atr_10x_ext")
+                    row["above_50dma_pct"] = ext.get("above_50dma_pct")
+                    break
+    except Exception as _ext_err:
+        logger.warning("breadth_ext injection failed (non-fatal): %s", _ext_err)
+
     base["leading_themes"] = _leading_themes_finviz_proxy()
     base["leading_themes_note"] = (
         "Top Finviz theme map names by 1D % — proxy for sector leadership; "
@@ -852,6 +874,19 @@ async def get_market_breadth() -> dict:
     _STOCKBEE_BREADTH_CACHE = base
     _STOCKBEE_BREADTH_CACHE_TS = now
     return base
+
+
+@app.get("/api/market-breadth/ext")
+async def get_market_breadth_ext() -> dict:
+    """
+    Post-close breadth extension columns: 10x ATR count + % above 50dma
+    from today's Finviz up-4%+ universe. Date-cached (recomputes once per trading day).
+    """
+    try:
+        from backend.breadth_ext import get_breadth_ext_today as _get_ext
+    except ImportError:
+        from breadth_ext import get_breadth_ext_today as _get_ext
+    return await _get_ext()
 
 
 @app.get("/api/industry/subindustry-movers")
