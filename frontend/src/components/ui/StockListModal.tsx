@@ -580,18 +580,19 @@ export default function StockListModal({
   return createPortal(
     /* Overlay — fixed inset-0 z-[200], covers everything including site header */
     <div
-      className="fixed inset-0 z-[200] bg-black/70"
+      className="fixed inset-0 z-[200] bg-black/80"
       onClick={onClose}
     >
       {/* Panel — z-[210] so it sits above the overlay */}
       <div
         className="fixed left-1/2 top-1/2 z-[210] flex w-[min(92vw,700px)] max-h-[85vh]
-          -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-xl border
-          border-terminal-border bg-terminal-bg shadow-2xl"
+          -translate-x-1/2 -translate-y-1/2 flex-col rounded-xl border
+          border-terminal-border shadow-2xl"
+        style={{ backgroundColor: "#020617" }}
         onClick={(e) => e.stopPropagation()}
       >
         {/* ── Header — shrink-0 keeps it pinned while list scrolls ── */}
-        <div className="shrink-0 flex items-center gap-3 border-b border-terminal-border px-4 py-3">
+        <div className="shrink-0 flex items-center gap-3 border-b border-terminal-border px-4 py-3" style={{ backgroundColor: "#020617" }}>
           <div className="flex-1 min-w-0">
             <p className="truncate text-sm font-semibold text-slate-100">{filterLabel}</p>
             {!loading && (
@@ -638,7 +639,7 @@ export default function StockListModal({
         </div>
 
         {/* ── Body — flex-1 min-h-0 so max-h on parent is respected ── */}
-        <div className="flex-1 min-h-0 overflow-y-auto">
+        <div className="flex-1 min-h-0 overflow-y-auto" style={{ backgroundColor: "#020617" }}>
           {loading ? (
             <SkeletonRows count={3} />
           ) : error ? (
