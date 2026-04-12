@@ -162,19 +162,19 @@ const MarketBreadthReport = memo(function MarketBreadthReport({ data }: { data: 
             <caption className="sr-only">Stockbee market monitor historical rows by date.</caption>
             <thead>
               <tr className="border-b border-gray-800">
-                <th scope="col" className="sticky left-0 z-10 bg-terminal-bg py-2 pr-3 t-label text-emerald-400 whitespace-nowrap">Date</th>
-                <th scope="col" className="px-1 py-2 t-label text-emerald-400 whitespace-nowrap">Up 4%+</th>
-                <th scope="col" className="px-1 py-2 t-label text-emerald-400 whitespace-nowrap">Dn 4%+</th>
-                <th scope="col" className="px-1 py-2 t-label text-emerald-400 whitespace-nowrap">5d R</th>
-                <th scope="col" className="px-1 py-2 t-label text-emerald-400 whitespace-nowrap">10d R</th>
-                <th scope="col" className="px-1 py-2 t-label text-emerald-400 whitespace-nowrap">Up 25% Q</th>
-                <th scope="col" className="px-1 py-2 t-label text-emerald-400 whitespace-nowrap">Dn 25% Q</th>
-                <th scope="col" className="px-1 py-2 t-label text-emerald-400 whitespace-nowrap">Up 25% M</th>
-                <th scope="col" className="px-1 py-2 t-label text-emerald-400 whitespace-nowrap">Dn 25% M</th>
-                <th scope="col" className="px-1 py-2 t-label text-emerald-400 whitespace-nowrap">Up 50% M</th>
-                <th scope="col" className="px-1 py-2 t-label text-emerald-400 whitespace-nowrap">Dn 50% M</th>
-                <th scope="col" className="px-1 py-2 t-label text-emerald-400 whitespace-nowrap">Up 13% 34d</th>
-                <th scope="col" className="px-1 py-2 t-label text-emerald-400 whitespace-nowrap">Dn 13% 34d</th>
+                <th scope="col" className="sticky left-0 z-10 bg-terminal-bg py-2 pr-3 t-label text-emerald-400 whitespace-nowrap">DATE</th>
+                <th scope="col" className="px-1 py-2 t-label text-emerald-400 whitespace-nowrap">UP 4%+</th>
+                <th scope="col" className="px-1 py-2 t-label text-emerald-400 whitespace-nowrap">DN 4%+</th>
+                <th scope="col" className="px-1 py-2 t-label text-emerald-400 whitespace-nowrap">5D R</th>
+                <th scope="col" className="px-1 py-2 t-label text-emerald-400 whitespace-nowrap">10D R</th>
+                <th scope="col" className="px-1 py-2 t-label text-emerald-400 whitespace-nowrap">UP 25% Q</th>
+                <th scope="col" className="px-1 py-2 t-label text-emerald-400 whitespace-nowrap">DN 25% Q</th>
+                <th scope="col" className="px-1 py-2 t-label text-emerald-400 whitespace-nowrap">UP 25% M</th>
+                <th scope="col" className="px-1 py-2 t-label text-emerald-400 whitespace-nowrap">DN 25% M</th>
+                <th scope="col" className="px-1 py-2 t-label text-emerald-400 whitespace-nowrap">UP 50% M</th>
+                <th scope="col" className="px-1 py-2 t-label text-emerald-400 whitespace-nowrap">DN 50% M</th>
+                <th scope="col" className="px-1 py-2 t-label text-emerald-400 whitespace-nowrap">UP 13% 34D</th>
+                <th scope="col" className="px-1 py-2 t-label text-emerald-400 whitespace-nowrap">DN 13% 34D</th>
                 <th scope="col" className="px-1 py-2 t-label text-purple-400 whitespace-nowrap">10x ATR Ext</th>
                 <th scope="col" className="px-1 py-2 t-label text-sky-400 whitespace-nowrap">&gt;50 DMA</th>
                 <th scope="col" className="px-1 py-2 t-label text-amber-400 whitespace-nowrap">Share Universe</th>
