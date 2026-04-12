@@ -5,6 +5,7 @@ APScheduler-based cron that fires Market Intelligence briefs at precise ET times
 
 Schedule (Mon–Fri, NYSE trading days only):
   08:03 AM ET  →  Pre-Market brief
+  04:35 PM ET  →  Breadth stock list cache pre-warm (all 10 Finviz filters)
   04:55 PM ET  →  Post-Market brief
 
 Holiday skipping uses pandas_market_calendars (exchange-calendars package is already
@@ -95,6 +96,66 @@ def _sync_run_brief(brief_type: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Breadth stock list pre-warm job
+# ---------------------------------------------------------------------------
+
+async def _prewarm_breadth_stocks() -> None:
+    """
+    Pre-warm the in-memory cache for all 10 breadth stock list filters.
+
+    Runs at 4:35 PM ET — 5 minutes after Finviz finalises closing prices.
+    Fetches all filters sequentially (to avoid hammering Finviz) so that
+    the first user who clicks a drill-down gets an instant cache hit
+    instead of waiting 30–120 s for a live scrape.
+    """
+    today = datetime.now(NY_TZ).date()
+    if not _is_trading_day(today):
+        log.info("Scheduler: skipping breadth pre-warm — not a trading day (%s)", today)
+        return
+
+    try:
+        try:
+            from backend.breadth_stocks import fetch_breadth_stock_list, VALID_FILTERS
+        except ImportError:
+            from breadth_stocks import fetch_breadth_stock_list, VALID_FILTERS  # type: ignore[no-redef]
+    except Exception as exc:
+        log.error("Scheduler: breadth pre-warm import failed: %s", exc)
+        return
+
+    filters = sorted(VALID_FILTERS)
+    log.info("Scheduler: starting breadth pre-warm for %d filters: %s", len(filters), filters)
+
+    ok, failed = 0, []
+    for fk in filters:
+        try:
+            stocks = await fetch_breadth_stock_list(fk)
+            log.info("Scheduler: pre-warm [%s] → %d stocks cached", fk, len(stocks))
+            ok += 1
+        except Exception as exc:
+            log.warning("Scheduler: pre-warm [%s] failed: %s", fk, exc)
+            failed.append(fk)
+        # Small delay between filters — be polite to Finviz
+        await asyncio.sleep(2.0)
+
+    if failed:
+        log.warning("Scheduler: breadth pre-warm finished — %d ok, %d failed: %s", ok, len(failed), failed)
+    else:
+        log.info("Scheduler: breadth pre-warm complete — all %d filters cached ✓", ok)
+
+
+def _sync_prewarm_breadth_stocks() -> None:
+    """APScheduler sync bridge for the breadth pre-warm job."""
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            asyncio.ensure_future(_prewarm_breadth_stocks())
+        else:
+            loop.run_until_complete(_prewarm_breadth_stocks())
+    except Exception as exc:
+        log.error("Scheduler bridge error (breadth pre-warm): %s", exc)
+
+
+# ---------------------------------------------------------------------------
 # Scheduler lifecycle
 # ---------------------------------------------------------------------------
 
@@ -139,6 +200,23 @@ def start_scheduler() -> None:
         misfire_grace_time=300,   # 5-min window in case server was briefly down
     )
 
+    # Breadth pre-warm: 04:35 PM ET, Mon–Fri
+    # Finviz finalises closing prices at ~4:30 PM ET; we wait 5 extra minutes.
+    _scheduler.add_job(
+        _sync_prewarm_breadth_stocks,
+        trigger=CronTrigger(
+            day_of_week="mon-fri",
+            hour=16,
+            minute=35,
+            second=0,
+            timezone=eastern,
+        ),
+        id="breadth_prewarm",
+        name="Breadth Stock List Cache Pre-warm",
+        replace_existing=True,
+        misfire_grace_time=600,   # 10-min window — scrape takes a while
+    )
+
     # Post-market: 04:55 PM ET, Mon–Fri
     _scheduler.add_job(
         _sync_run_brief,
@@ -158,7 +236,8 @@ def start_scheduler() -> None:
 
     _scheduler.start()
     log.info(
-        "Market scheduler started — pre @ 08:03 ET, post @ 16:55 ET (Mon-Fri, trading days only)"
+        "Market scheduler started — pre @ 08:03 ET, breadth pre-warm @ 16:35 ET, "
+        "post @ 16:55 ET (Mon-Fri, trading days only)"
     )
 
 
