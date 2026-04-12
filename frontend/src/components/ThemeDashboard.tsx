@@ -3,6 +3,7 @@ import { AlertTriangle, BarChart2, BarChart3, ChevronRight, Info, LayoutGrid, Li
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import MarketBreadth from "./MarketBreadth";
 import { useWatchlist } from "../hooks/useWatchlist";
+import { useIbkrStatus } from "../hooks/useIbkrStatus";
 import { API_BASE_URL } from "../lib/apiBase";
 import { formatMoney, fmtPct, fmtPrice, pctClass } from "../lib/formatters";
 import { RotationView } from "./RotationView";
@@ -1615,23 +1616,57 @@ function TickerDrawer({
   ticker,
   meta,
   onClose,
+  ibkrLive = false,
 }: {
   ticker: string;
   meta?: TickerDrawerMeta | null;
   onClose: () => void;
+  ibkrLive?: boolean;
 }) {
   const { intel, intelLoading, news, newsLoading, earnings, earningsLoading } = useTickerDrawerData(ticker);
 
+  // ── IBKR live quote overlay ──────────────────────────────────────────────
+  const [ibkrQuote, setIbkrQuote] = useState<{ last: number | null; change_pct: number | null } | null>(null);
+  const ibkrQuoteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (!ibkrLive || !ticker) { setIbkrQuote(null); return; }
+    const t = ticker.trim().toUpperCase();
+    let alive = true;
+
+    const load = async () => {
+      try {
+        const r = await fetch(`${API_BASE_URL}/api/ibkr/quotes?symbols=${encodeURIComponent(t)}`);
+        if (!r.ok || !alive) return;
+        const data = (await r.json()) as { ok: boolean; live: boolean; quotes?: Array<{ ticker: string; last: number | null; change_pct: number | null }> };
+        if (!data.ok || !data.live || !data.quotes || !alive) return;
+        const q = data.quotes.find((x) => (x.ticker ?? "").toUpperCase() === t);
+        if (q && alive) setIbkrQuote({ last: q.last ?? null, change_pct: q.change_pct ?? null });
+      } catch { /* silent */ }
+    };
+
+    void load();
+    ibkrQuoteTimerRef.current = setInterval(() => void load(), 30_000);
+    return () => {
+      alive = false;
+      if (ibkrQuoteTimerRef.current) clearInterval(ibkrQuoteTimerRef.current);
+    };
+  }, [ibkrLive, ticker]);
+
+  // Resolved price + change — prefer IBKR live, fall back to intel (yfinance)
+  const displayClose = ibkrLive && ibkrQuote?.last != null ? ibkrQuote.last : (intel?.close ?? null);
+  const displayChangePct = ibkrLive && ibkrQuote?.change_pct != null ? ibkrQuote.change_pct : (intel?.today_return_pct ?? null);
+
   const changeText = useMemo(() => {
-    if (!intel || intel.close == null || !Number.isFinite(intel.today_return_pct)) return "—";
-    const close = Number(intel.close);
-    const pct = Number(intel.today_return_pct);
+    if (displayClose == null || displayChangePct == null || !Number.isFinite(displayChangePct)) return "—";
+    const close = Number(displayClose);
+    const pct = Number(displayChangePct);
     const prev = pct === -100 ? null : close / (1 + pct / 100);
     if (prev == null || !Number.isFinite(prev) || prev === 0) return "—";
     const chg = close - prev;
     const sign = chg >= 0 ? "+" : "";
     return `${sign}${fmtPrice(chg)} (${fmtPct(pct, 2)})`;
-  }, [intel]);
+  }, [displayClose, displayChangePct]);
 
   const nextEarningsText = useMemo(() => {
     const iso = earnings?.earnings_et_iso ?? null;
@@ -1667,8 +1702,20 @@ function TickerDrawer({
             </button>
           </div>
           <div className="mt-2 flex flex-wrap items-baseline gap-x-3 gap-y-1 t-data">
-            <span className="font-mono text-slate-200 tabular-nums">{intel?.close == null ? "—" : fmtPrice(intel.close)}</span>
-            <span className={`font-mono tabular-nums ${pctClass(intel?.today_return_pct ?? 0)}`}>{changeText}</span>
+            <span className="font-mono text-slate-200 tabular-nums">
+              {displayClose == null ? "—" : fmtPrice(displayClose)}
+            </span>
+            <span className={`font-mono tabular-nums ${pctClass(displayChangePct ?? 0)}`}>{changeText}</span>
+            {ibkrLive && ibkrQuote?.last != null ? (
+              <span className="flex items-center gap-1 rounded border border-emerald-700/40 bg-emerald-950/50 px-1.5 py-0.5 font-mono text-[9px] font-semibold text-emerald-400">
+                <span className="inline-flex h-1 w-1 rounded-full bg-emerald-400 animate-pulse" />
+                IBKR LIVE
+              </span>
+            ) : (
+              <span className="rounded border border-amber-800/30 bg-amber-950/30 px-1.5 py-0.5 font-mono text-[9px] font-semibold text-amber-600">
+                DELAYED
+              </span>
+            )}
             <span className="text-slate-600">·</span>
             <span className="text-slate-400">Next earnings:</span>
             <span className="font-mono text-slate-300 tabular-nums">{earningsLoading ? "Loading…" : nextEarningsText}</span>
@@ -1731,7 +1778,9 @@ function TickerDrawer({
           </section>
 
           <p className="mt-3 t-micro">
-            Note: This drawer currently uses best‑effort Yahoo Finance data (intel/news/earnings). Insider/institution/analyst target changes can be added next.
+            {ibkrLive
+              ? "Price · change: IBKR real-time. News/earnings: Yahoo Finance best-effort."
+              : "Note: Price · change · news use best-effort Yahoo Finance (delayed). Connect IBKR for real-time price."}
           </p>
           <p className="mt-2 t-micro text-slate-600">Press Esc to close this drawer.</p>
         </div>
@@ -1835,6 +1884,493 @@ function useIntelBrief() {
   }, []);
 
   return { pre, post, loading, refresh };
+}
+
+// ── IBKR News hook ────────────────────────────────────────────────────────────
+type IbkrHeadline = {
+  id: string | null;
+  headline: string;
+  provider: string;
+  date_utc: string | null;
+  tickers: string[];
+};
+
+function useIbkrNews(ibkrLive: boolean) {
+  const [headlines, setHeadlines] = useState<IbkrHeadline[]>([]);
+
+  const load = useCallback(async () => {
+    if (!ibkrLive) return;
+    try {
+      const r = await fetch(`${API_BASE_URL}/api/ibkr/news?limit=15`);
+      if (!r.ok) return;
+      const data = (await r.json()) as { ok: boolean; live: boolean; headlines?: IbkrHeadline[] };
+      if (data.ok && data.live && data.headlines) setHeadlines(data.headlines);
+    } catch { /* silent */ }
+  }, [ibkrLive]);
+
+  useEffect(() => {
+    if (!ibkrLive) { setHeadlines([]); return; }
+    void load();
+    const id = window.setInterval(() => void load(), 5 * 60_000);
+    return () => window.clearInterval(id);
+  }, [ibkrLive, load]);
+
+  return headlines;
+}
+
+// ── IBKR Economic Calendar hook ───────────────────────────────────────────────
+type IbkrCalendarEvent = {
+  event: string;
+  country: string;
+  currency: string;
+  scheduled_utc: string | null;
+  actual: string | null;
+  forecast: string | null;
+  previous: string | null;
+  impact: string | null;
+};
+
+function useIbkrCalendar(ibkrLive: boolean) {
+  const [events, setEvents] = useState<IbkrCalendarEvent[]>([]);
+
+  const load = useCallback(async () => {
+    if (!ibkrLive) return;
+    try {
+      const r = await fetch(`${API_BASE_URL}/api/ibkr/calendar`);
+      if (!r.ok) return;
+      const data = (await r.json()) as { ok: boolean; live: boolean; events?: IbkrCalendarEvent[] };
+      if (data.ok && data.live && data.events) setEvents(data.events);
+    } catch { /* silent */ }
+  }, [ibkrLive]);
+
+  useEffect(() => {
+    if (!ibkrLive) { setEvents([]); return; }
+    void load();
+    const id = window.setInterval(() => void load(), 15 * 60_000);
+    return () => window.clearInterval(id);
+  }, [ibkrLive, load]);
+
+  return events;
+}
+
+// ── IBKR News Card ─────────────────────────────────────────────────────────────
+function IbkrNewsCard({ headlines }: { headlines: IbkrHeadline[] }) {
+  const fmt = (iso: string | null) => {
+    if (!iso) return "";
+    try {
+      return new Date(iso).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", timeZone: "America/New_York" }) + " ET";
+    } catch { return ""; }
+  };
+
+  return (
+    <section className="flex min-h-0 flex-col rounded-xl border border-terminal-border bg-terminal-card shadow-sm">
+      <header className="shrink-0 border-b border-terminal-border px-3 py-1.5">
+        <div className="flex items-center gap-1.5">
+          <span className="inline-flex h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+          <span className="t-section">IBKR Live Headlines</span>
+          <span className="ml-auto t-micro text-slate-600">refreshes 5m</span>
+        </div>
+      </header>
+      <div className="fintech-scroll min-h-0 max-h-[220px] overflow-y-auto">
+        {headlines.length === 0 ? (
+          <p className="p-3 t-data text-slate-600">No headlines available.</p>
+        ) : (
+          <ul className="divide-y divide-terminal-border/40">
+            {headlines.map((h, i) => (
+              <li key={h.id ?? i} className="px-3 py-2">
+                <p className="t-data text-slate-200 leading-snug">{h.headline}</p>
+                <div className="mt-0.5 flex items-center gap-2 t-micro text-slate-600">
+                  {h.provider && <span>{h.provider}</span>}
+                  {h.date_utc && <span>{fmt(h.date_utc)}</span>}
+                  {h.tickers.length > 0 && (
+                    <span className="text-accent/80">{h.tickers.slice(0, 3).join(" · ")}</span>
+                  )}
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </section>
+  );
+}
+
+// ── Econ Calendar Card ─────────────────────────────────────────────────────────
+function EconCalendarCard({ events }: { events: IbkrCalendarEvent[] }) {
+  const impactCls = (impact: string | null) => {
+    const v = (impact ?? "").toLowerCase();
+    if (v.includes("high") || v === "3") return "bg-rose-600 text-white";
+    if (v.includes("med") || v === "2") return "bg-amber-500 text-black";
+    return "bg-slate-700 text-slate-300";
+  };
+  const impactLabel = (impact: string | null) => {
+    const v = (impact ?? "").toLowerCase();
+    if (v.includes("high") || v === "3") return "H";
+    if (v.includes("med") || v === "2") return "M";
+    return "L";
+  };
+  const fmtTime = (iso: string | null) => {
+    if (!iso) return "—";
+    try {
+      return new Date(iso).toLocaleString("en-US", {
+        month: "short", day: "numeric",
+        hour: "2-digit", minute: "2-digit",
+        timeZone: "America/New_York",
+      }) + " ET";
+    } catch { return iso ?? "—"; }
+  };
+
+  return (
+    <section className="flex min-h-0 flex-col rounded-xl border border-terminal-border bg-terminal-card shadow-sm">
+      <header className="shrink-0 border-b border-terminal-border px-3 py-1.5">
+        <div className="flex items-center gap-1.5">
+          <span className="inline-flex h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+          <span className="t-section">Economic Calendar</span>
+          <span className="ml-auto t-micro text-slate-600">refreshes 15m</span>
+        </div>
+      </header>
+      <div className="fintech-scroll min-h-0 max-h-[220px] overflow-y-auto">
+        {events.length === 0 ? (
+          <p className="p-3 t-data text-slate-600">No upcoming events.</p>
+        ) : (
+          <table className="w-full text-left">
+            <tbody className="divide-y divide-terminal-border/40">
+              {events.slice(0, 20).map((ev, i) => (
+                <tr key={i} className="hover:bg-terminal-elevated/30">
+                  <td className="py-1.5 pl-3 pr-1 align-top">
+                    <span className={`inline-flex h-4 w-4 items-center justify-center rounded-sm text-[9px] font-bold ${impactCls(ev.impact)}`}>
+                      {impactLabel(ev.impact)}
+                    </span>
+                  </td>
+                  <td className="py-1.5 pr-2 align-top">
+                    <p className="t-data font-semibold text-slate-200 leading-snug">{ev.event}</p>
+                    <p className="t-micro text-slate-600">{ev.currency || ev.country} · {fmtTime(ev.scheduled_utc)}</p>
+                  </td>
+                  <td className="py-1.5 pr-3 align-top text-right t-mono text-slate-400">
+                    {ev.actual != null ? (
+                      <span className="text-emerald-400">{ev.actual}</span>
+                    ) : ev.forecast != null ? (
+                      <span title="Forecast">{ev.forecast}</span>
+                    ) : null}
+                    {ev.previous != null && (
+                      <p className="t-micro text-slate-600">prev {ev.previous}</p>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </section>
+  );
+}
+
+// ── IBKR Scanner hook ─────────────────────────────────────────────────────────
+type IbkrScanResult = {
+  conid: number | null;
+  ticker: string;
+  company: string;
+  last: number | null;
+  change_pct: number | null;
+  volume: number | null;
+  sector: string;
+  exchange: string;
+};
+
+const SCAN_TYPES = [
+  { value: "TOP_PERC_GAIN", label: "Top Gainers" },
+  { value: "TOP_PERC_LOSE", label: "Top Losers" },
+  { value: "MOST_ACTIVE", label: "Most Active" },
+  { value: "TOP_TRADE_RATE", label: "Top Trade Rate" },
+  { value: "HOT_BY_VOLUME", label: "Hot by Volume" },
+] as const;
+
+function useIbkrScanner(ibkrLive: boolean, scanType: string) {
+  const [results, setResults] = useState<IbkrScanResult[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [fetchedAt, setFetchedAt] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    if (!ibkrLive) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const r = await fetch(`${API_BASE_URL}/api/ibkr/scanner?scan_type=${encodeURIComponent(scanType)}&limit=25`);
+      if (!r.ok) { setError(`HTTP ${r.status}`); return; }
+      const data = (await r.json()) as { ok: boolean; live: boolean; results?: IbkrScanResult[]; error?: string; fetched_at_utc?: string };
+      if (!data.ok) { setError(data.error ?? "Scanner failed"); return; }
+      setResults(data.results ?? []);
+      setFetchedAt(data.fetched_at_utc ?? null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Network error");
+    } finally {
+      setLoading(false);
+    }
+  }, [ibkrLive, scanType]);
+
+  useEffect(() => {
+    if (!ibkrLive) { setResults([]); setError(null); return; }
+    void load();
+    const id = window.setInterval(() => void load(), 60_000);
+    return () => window.clearInterval(id);
+  }, [ibkrLive, load]);
+
+  return { results, loading, error, fetchedAt, reload: load };
+}
+
+// ── IBKR Tab View ──────────────────────────────────────────────────────────────
+function IbkrView({
+  ibkrLive,
+  ibkrError,
+  onSelectTicker,
+  watchlisted,
+  onToggleWatchlist,
+}: {
+  ibkrLive: boolean;
+  ibkrError: string | null;
+  onSelectTicker: (ticker: string) => void;
+  watchlisted: Set<string>;
+  onToggleWatchlist: (ticker: string) => void | Promise<void>;
+}) {
+  const [scanType, setScanType] = useState("TOP_PERC_GAIN");
+  const ibkrHeadlines = useIbkrNews(ibkrLive);
+  const ibkrCalEvents = useIbkrCalendar(ibkrLive);
+  const { results, loading, error, fetchedAt, reload } = useIbkrScanner(ibkrLive, scanType);
+
+  const fmtPctLocal = (v: number | null) => {
+    if (v == null) return "—";
+    const s = (v >= 0 ? "+" : "") + v.toFixed(2) + "%";
+    return s;
+  };
+  const pctClsLocal = (v: number | null) =>
+    v == null ? "text-slate-500" : v >= 0 ? "text-emerald-400" : "text-rose-400";
+
+  const fmtVol = (v: number | null) => {
+    if (v == null) return "—";
+    if (v >= 1_000_000) return (v / 1_000_000).toFixed(1) + "M";
+    if (v >= 1_000) return (v / 1_000).toFixed(0) + "K";
+    return String(v);
+  };
+
+  // Lock screen when IBKR is offline
+  if (!ibkrLive) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-4 text-center">
+        <div className="rounded-full border border-amber-700/40 bg-amber-950/40 p-4">
+          <span className="text-3xl">🔒</span>
+        </div>
+        <div>
+          <p className="text-[15px] font-semibold text-white">IBKR Not Connected</p>
+          <p className="mt-1 max-w-xs t-data text-slate-500">
+            {ibkrError ?? "Start the IBKR Client Portal Gateway and log in to access live data."}
+          </p>
+        </div>
+        <div className="rounded-lg border border-terminal-border bg-terminal-elevated px-4 py-3 text-left text-xs text-slate-400 font-mono max-w-sm">
+          <p className="font-semibold text-slate-300 mb-1">Quick start:</p>
+          <p>1. Run the gateway: <span className="text-accent">.\bin\run.bat root\conf.yaml</span></p>
+          <p>2. Login at <span className="text-accent">https://localhost:5000</span></p>
+          <p>3. Approve 2FA on your phone</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex h-full min-h-0 flex-col gap-4 p-4 overflow-auto">
+      {/* Top row: Scanner + News side by side */}
+      <div className="flex min-h-0 flex-col gap-4 lg:flex-row">
+
+        {/* Market Scanner */}
+        <section className="flex min-h-0 flex-1 flex-col rounded-xl border border-terminal-border bg-terminal-card shadow-sm">
+          <header className="shrink-0 border-b border-terminal-border px-4 py-2.5">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="inline-flex h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+              <span className="t-section">Market Scanner</span>
+              {/* Scan type picker */}
+              <div className="ml-2 flex flex-wrap gap-1">
+                {SCAN_TYPES.map((s) => (
+                  <button
+                    key={s.value}
+                    type="button"
+                    onClick={() => setScanType(s.value)}
+                    className={`rounded-full border px-2.5 py-0.5 t-micro font-semibold transition-colors ${
+                      scanType === s.value
+                        ? "border-accent/40 bg-accent/20 text-white"
+                        : "border-terminal-border text-slate-500 hover:text-white"
+                    }`}
+                  >
+                    {s.label}
+                  </button>
+                ))}
+              </div>
+              <div className="ml-auto flex items-center gap-2">
+                {fetchedAt && (
+                  <span className="t-micro text-slate-600">
+                    {new Date(fetchedAt).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", timeZone: "America/New_York" })} ET
+                  </span>
+                )}
+                <button
+                  type="button"
+                  onClick={() => void reload()}
+                  disabled={loading}
+                  className="rounded border border-terminal-border bg-terminal-bg px-2 py-0.5 t-micro font-semibold text-slate-400 hover:text-white disabled:opacity-40"
+                >
+                  {loading ? "…" : "↺"}
+                </button>
+              </div>
+            </div>
+          </header>
+
+          <div className="fintech-scroll min-h-0 flex-1 overflow-auto">
+            {loading && !results.length ? (
+              <div className="flex flex-col gap-2 p-4">
+                {[...Array(8)].map((_, i) => (
+                  <div key={i} className="h-8 animate-pulse rounded bg-terminal-border/40" />
+                ))}
+              </div>
+            ) : error ? (
+              <p className="p-4 text-sm text-rose-300">{error}</p>
+            ) : results.length === 0 ? (
+              <p className="p-4 t-data text-slate-500">No results. Try refreshing.</p>
+            ) : (
+              <table className="w-full text-left">
+                <thead className="sticky top-0 bg-terminal-card border-b border-terminal-border/50">
+                  <tr>
+                    <th className="px-3 py-2 t-micro text-slate-500 font-semibold">#</th>
+                    <th className="px-3 py-2 t-micro text-slate-500 font-semibold">Ticker</th>
+                    <th className="px-3 py-2 t-micro text-slate-500 font-semibold">Company</th>
+                    <th className="px-3 py-2 t-micro text-slate-500 font-semibold text-right">Last</th>
+                    <th className="px-3 py-2 t-micro text-slate-500 font-semibold text-right">Chg%</th>
+                    <th className="px-3 py-2 t-micro text-slate-500 font-semibold text-right">Volume</th>
+                    <th className="px-3 py-2 t-micro text-slate-500 font-semibold">Sector</th>
+                    <th className="px-3 py-2 t-micro text-slate-500 font-semibold">★</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-terminal-border/30">
+                  {results.map((r, i) => (
+                    <tr key={r.ticker || i} className="hover:bg-terminal-elevated/30 transition-colors">
+                      <td className="px-3 py-2 t-micro text-slate-600">{i + 1}</td>
+                      <td className="px-3 py-2">
+                        <button
+                          type="button"
+                          onClick={() => onSelectTicker(r.ticker)}
+                          className="font-mono text-[12px] font-bold text-accent hover:underline"
+                        >
+                          {r.ticker}
+                        </button>
+                      </td>
+                      <td className="px-3 py-2 t-data text-slate-300 max-w-[160px] truncate">{r.company || "—"}</td>
+                      <td className="px-3 py-2 t-mono text-slate-200 text-right">
+                        {r.last != null ? `$${r.last.toFixed(2)}` : "—"}
+                      </td>
+                      <td className={`px-3 py-2 t-mono text-right font-semibold ${pctClsLocal(r.change_pct)}`}>
+                        {fmtPctLocal(r.change_pct)}
+                      </td>
+                      <td className="px-3 py-2 t-mono text-slate-400 text-right">{fmtVol(r.volume)}</td>
+                      <td className="px-3 py-2 t-micro text-slate-500 max-w-[100px] truncate">{r.sector || "—"}</td>
+                      <td className="px-3 py-2">
+                        <button
+                          type="button"
+                          onClick={() => void onToggleWatchlist(r.ticker)}
+                          className={`text-sm transition-colors ${watchlisted.has(r.ticker) ? "text-amber-400" : "text-slate-600 hover:text-amber-400"}`}
+                          title={watchlisted.has(r.ticker) ? "Remove from watchlist" : "Add to watchlist"}
+                        >
+                          {watchlisted.has(r.ticker) ? "★" : "☆"}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </section>
+
+        {/* Right column: News + Calendar */}
+        <div className="flex w-full flex-col gap-4 lg:w-[340px] lg:shrink-0">
+          {/* IBKR Live Headlines */}
+          <section className="flex min-h-0 flex-col rounded-xl border border-terminal-border bg-terminal-card shadow-sm">
+            <header className="shrink-0 border-b border-terminal-border px-3 py-2">
+              <div className="flex items-center gap-1.5">
+                <span className="inline-flex h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                <span className="t-section">Live Headlines</span>
+                <span className="ml-auto t-micro text-slate-600">5m</span>
+              </div>
+            </header>
+            <div className="fintech-scroll min-h-0 max-h-[280px] overflow-y-auto">
+              {ibkrHeadlines.length === 0 ? (
+                <p className="p-3 t-data text-slate-600">No headlines.</p>
+              ) : (
+                <ul className="divide-y divide-terminal-border/40">
+                  {ibkrHeadlines.map((h, i) => (
+                    <li key={h.id ?? i} className="px-3 py-2">
+                      <p className="t-data text-slate-200 leading-snug">{h.headline}</p>
+                      <div className="mt-0.5 flex items-center gap-2 t-micro text-slate-600">
+                        {h.provider && <span>{h.provider}</span>}
+                        {h.tickers && h.tickers.length > 0 && (
+                          <span className="text-accent/80">{h.tickers.slice(0, 3).join(" · ")}</span>
+                        )}
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </section>
+
+          {/* Economic Calendar */}
+          <section className="flex min-h-0 flex-col rounded-xl border border-terminal-border bg-terminal-card shadow-sm">
+            <header className="shrink-0 border-b border-terminal-border px-3 py-2">
+              <div className="flex items-center gap-1.5">
+                <span className="inline-flex h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                <span className="t-section">Economic Calendar</span>
+                <span className="ml-auto t-micro text-slate-600">15m</span>
+              </div>
+            </header>
+            <div className="fintech-scroll min-h-0 max-h-[280px] overflow-y-auto">
+              {ibkrCalEvents.length === 0 ? (
+                <p className="p-3 t-data text-slate-600">No upcoming events.</p>
+              ) : (
+                <table className="w-full text-left">
+                  <tbody className="divide-y divide-terminal-border/40">
+                    {ibkrCalEvents.slice(0, 15).map((ev, i) => {
+                      const impact = (ev.impact ?? "").toLowerCase();
+                      const impactCls = impact.includes("high") || impact === "3"
+                        ? "bg-rose-600 text-white"
+                        : impact.includes("med") || impact === "2"
+                        ? "bg-amber-500 text-black"
+                        : "bg-slate-700 text-slate-300";
+                      const impactLabel = impact.includes("high") || impact === "3" ? "H"
+                        : impact.includes("med") || impact === "2" ? "M" : "L";
+                      return (
+                        <tr key={i} className="hover:bg-terminal-elevated/30">
+                          <td className="py-1.5 pl-3 pr-1 align-top">
+                            <span className={`inline-flex h-4 w-4 items-center justify-center rounded-sm text-[9px] font-bold ${impactCls}`}>
+                              {impactLabel}
+                            </span>
+                          </td>
+                          <td className="py-1.5 pr-2 align-top">
+                            <p className="t-data font-semibold text-slate-200 leading-snug">{ev.event}</p>
+                            <p className="t-micro text-slate-600">{ev.currency || ev.country}</p>
+                          </td>
+                          <td className="py-1.5 pr-3 align-top text-right t-mono text-xs text-slate-400">
+                            {ev.actual != null ? <span className="text-emerald-400">{ev.actual}</span>
+                              : ev.forecast != null ? <span>{ev.forecast}</span> : null}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </section>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 // ── Intelligence Brief panel (auto-displaying, no Generate button) ─────────────
@@ -2517,6 +3053,7 @@ const ScannerView = memo(function ScannerView({
   watchlisted,
   onToggleWatchlist,
   onSelectTicker,
+  ibkrLive = false,
 }: {
   payload: ApiPayload;
   spotlightThemeName: string | null;
@@ -2530,7 +3067,29 @@ const ScannerView = memo(function ScannerView({
   watchlisted: Set<string>;
   onToggleWatchlist: (ticker: string, ctx?: { theme?: string; sector?: string; grade?: string }) => void | Promise<void>;
   onSelectTicker: (ticker: string, meta?: TickerDrawerMeta) => void;
+  ibkrLive?: boolean;
 }) {
+  const ibkrHeadlines = useIbkrNews(ibkrLive);
+  const ibkrCalEvents = useIbkrCalendar(ibkrLive);
+
+  // ── Live quotes for all leader tickers across the leaderboard ──────────────
+  const [lbQuotes, setLbQuotes] = useState<Record<string, { last: number | null; change_pct: number | null }>>({});
+  const lbQuoteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const fetchLbQuotes = useCallback(async (tickers: string[]) => {
+    if (!ibkrLive || !tickers.length) return;
+    const slice = tickers.slice(0, 20);
+    try {
+      const r = await fetch(`${API_BASE_URL}/api/ibkr/quotes?symbols=${encodeURIComponent(slice.join(","))}`);
+      if (!r.ok) return;
+      const data = (await r.json()) as { ok: boolean; live: boolean; quotes?: Array<{ ticker: string; last: number | null; change_pct: number | null }> };
+      if (!data.ok || !data.live || !data.quotes) return;
+      const map: Record<string, { last: number | null; change_pct: number | null }> = {};
+      for (const q of data.quotes) if (q.ticker) map[q.ticker.toUpperCase()] = { last: q.last ?? null, change_pct: q.change_pct ?? null };
+      setLbQuotes((prev) => ({ ...prev, ...map }));
+    } catch { /* silent */ }
+  }, [ibkrLive]);
+
   const [leaderboardMode, setLeaderboardMode] = useState<"themes" | "industry">("themes");
   // drilldownLabel: when set (industry mode only), filter rows to this thematic bucket.
   const [drilldownLabel, setDrilldownLabel] = useState<string | null>(null);
@@ -2732,6 +3291,28 @@ const ScannerView = memo(function ScannerView({
     );
   }, [leaderboardMode, finvizFilteredRows, rsPercentileMap, lbSortKey, lbSortMul, themes]);
 
+  // Collect all unique leader tickers and fetch live quotes when IBKR is live
+  const allLeaderTickers = useMemo(() => {
+    if (!ibkrLive) return [];
+    const set = new Set<string>();
+    const groups = leaderboardMode === "themes" ? themesLeaderboardGroups : industryLeaderboardGroups;
+    for (const g of groups) {
+      for (const row of g.rows) {
+        for (const t of (row.leaders ?? []).slice(0, 3)) {
+          if (t) set.add(t.toUpperCase());
+        }
+      }
+    }
+    return [...set];
+  }, [ibkrLive, leaderboardMode, themesLeaderboardGroups, industryLeaderboardGroups]);
+
+  useEffect(() => {
+    if (!ibkrLive || !allLeaderTickers.length) { setLbQuotes({}); return; }
+    void fetchLbQuotes(allLeaderTickers);
+    lbQuoteTimerRef.current = setInterval(() => void fetchLbQuotes(allLeaderTickers), 30_000);
+    return () => { if (lbQuoteTimerRef.current) clearInterval(lbQuoteTimerRef.current); };
+  }, [ibkrLive, allLeaderTickers, fetchLbQuotes]);
+
   const rsRows = useMemo(() => {
     return sortedThemes
       .map((t) => ({ theme: t.theme, rs: t.relativeStrength1M ?? t.relativeStrengthQualifierRatio }))
@@ -2852,6 +3433,12 @@ const ScannerView = memo(function ScannerView({
           onRefresh={onRefreshIntel}
         />
         <VixFearGaugeLite close={payload.vix?.close} changePct={payload.vix?.change_pct} />
+        {ibkrLive && ibkrHeadlines.length > 0 && (
+          <IbkrNewsCard headlines={ibkrHeadlines} />
+        )}
+        {ibkrLive && ibkrCalEvents.length > 0 && (
+          <EconCalendarCard events={ibkrCalEvents} />
+        )}
         <LiquidityFlowCard summary={payload.marketFlowSummary} />
       </div>
 
@@ -3328,7 +3915,7 @@ const ScannerView = memo(function ScannerView({
                 <col className="w-[78px]" />
                 <col className="w-[78px]" />
                 <col className="w-[88px]" />
-                <col className="w-[130px]" />
+                <col className={ibkrLive ? "w-[160px]" : "w-[130px]"} />
               </colgroup>
               <caption className="sr-only">
                 Leaderboard of themes or industries with performance and relative strength columns.
@@ -3410,26 +3997,31 @@ const ScannerView = memo(function ScannerView({
                       </th>
                       <th
                         scope="col"
-                        className={`${lbStickyTheadTh} min-w-0 truncate px-2 py-2 text-left t-label whitespace-nowrap overflow-hidden`}
+                        className={`${lbStickyTheadTh} min-w-0 truncate px-2 py-2 text-right t-label whitespace-nowrap overflow-hidden`}
                       >
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const key = "leaders" as const;
-                            if (sortKey === key) {
-                              setSortDir((d) => (d === "asc" ? "desc" : "asc"));
-                            } else {
-                              setSortKey(key);
-                              setSortDir("asc");
-                            }
-                          }}
-                          className="inline-flex items-center gap-1 hover:text-slate-300"
-                        >
-                          <span>Leaders</span>
-                          <span className={`t-micro ${sortKey === "leaders" ? "text-accent" : "text-slate-600"}`}>
-                            {sortKey === "leaders" ? (sortDir === "asc" ? "▲" : "▼") : "↕"}
-                          </span>
-                        </button>
+                        <div className="inline-flex items-center gap-1.5">
+                          {ibkrLive && (
+                            <span className="inline-flex h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" title="IBKR live quotes" />
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const key = "leaders" as const;
+                              if (sortKey === key) {
+                                setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+                              } else {
+                                setSortKey(key);
+                                setSortDir("asc");
+                              }
+                            }}
+                            className="inline-flex items-center gap-1 hover:text-slate-300"
+                          >
+                            <span>Leaders</span>
+                            <span className={`t-micro ${sortKey === "leaders" ? "text-accent" : "text-slate-600"}`}>
+                              {sortKey === "leaders" ? (sortDir === "asc" ? "▲" : "▼") : "↕"}
+                            </span>
+                          </button>
+                        </div>
                       </th>
                     </>
                   ) : null}
@@ -3786,8 +4378,30 @@ const ScannerView = memo(function ScannerView({
                                     </span>
                                   </div>
                                 </td>
-                                <td className="max-w-[130px] truncate overflow-hidden whitespace-nowrap px-2 py-2 text-right font-mono text-slate-300">
-                                  {(row.leaders ?? []).slice(0, 4).join(", ") || "—"}
+                                <td className="max-w-[160px] overflow-hidden px-2 py-2 text-right">
+                                  {ibkrLive ? (
+                                    <div className="flex flex-wrap justify-end gap-1">
+                                      {(row.leaders ?? []).slice(0, 3).map((t) => {
+                                        const q = lbQuotes[t.toUpperCase()];
+                                        const chg = q?.change_pct ?? null;
+                                        const chgCls = chg == null ? "text-slate-500" : chg >= 0 ? "text-emerald-400" : "text-rose-400";
+                                        return (
+                                          <span key={t} className="inline-flex flex-col items-end leading-none">
+                                            <span className="font-mono text-[10px] font-bold text-slate-300">{t}</span>
+                                            {q && (
+                                              <span className={`font-mono text-[9px] tabular-nums ${chgCls}`}>
+                                                {chg != null ? (chg >= 0 ? "+" : "") + chg.toFixed(1) + "%" : "—"}
+                                              </span>
+                                            )}
+                                          </span>
+                                        );
+                                      })}
+                                    </div>
+                                  ) : (
+                                    <span className="truncate font-mono text-slate-300">
+                                      {(row.leaders ?? []).slice(0, 4).join(", ") || "—"}
+                                    </span>
+                                  )}
                                 </td>
                               </tr>
                             );
@@ -3818,6 +4432,7 @@ const GappersView = memo(function GappersView({
   onSelectTicker,
   watchlisted,
   onToggleWatchlist,
+  ibkrLive = false,
 }: {
   gappers: PremarketGappersPayload | null;
   loading: boolean;
@@ -3836,6 +4451,7 @@ const GappersView = memo(function GappersView({
   onSelectTicker: (ticker: string, meta?: TickerDrawerMeta) => void;
   watchlisted: Set<string>;
   onToggleWatchlist: (ticker: string, ctx?: { theme?: string; sector?: string; grade?: string }) => void | Promise<void>;
+  ibkrLive?: boolean;
 }) {
   const [sortKey, setSortKey] = useState<
     "ticker" | "premktPct" | "premktVol" | "dailyPct" | "adr" | "mcap" | "sector" | "industry" | "grade" | "setup"
@@ -3903,6 +4519,35 @@ const GappersView = memo(function GappersView({
 
     return rows;
   }, [gappers?.rows, gapScannerGradeByTicker, sortDir, sortKey]);
+
+  // ── IBKR live quotes for all gapper tickers ──────────────────────────────
+  const [gapperQuotes, setGapperQuotes] = useState<Record<string, { last: number | null; change_pct: number | null }>>({});
+  const gapQuoteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    const tickers = sortedRows
+      .map((r) => gapScanRowSymbol(r))
+      .filter((s) => s && s !== "—")
+      .slice(0, 20);
+
+    if (!ibkrLive || !tickers.length) { setGapperQuotes({}); return; }
+
+    const load = async () => {
+      try {
+        const r = await fetch(`${API_BASE_URL}/api/ibkr/quotes?symbols=${encodeURIComponent(tickers.join(","))}`);
+        if (!r.ok) return;
+        const data = (await r.json()) as { ok: boolean; live: boolean; quotes?: Array<{ ticker: string; last: number | null; change_pct: number | null }> };
+        if (!data.ok || !data.live || !data.quotes) return;
+        const map: Record<string, { last: number | null; change_pct: number | null }> = {};
+        for (const q of data.quotes) if (q.ticker) map[q.ticker.toUpperCase()] = { last: q.last ?? null, change_pct: q.change_pct ?? null };
+        setGapperQuotes(map);
+      } catch { /* silent */ }
+    };
+
+    void load();
+    gapQuoteTimerRef.current = setInterval(() => void load(), 30_000);
+    return () => { if (gapQuoteTimerRef.current) clearInterval(gapQuoteTimerRef.current); };
+  }, [ibkrLive, sortedRows]);
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-terminal-bg p-4">
@@ -4000,6 +4645,7 @@ const GappersView = memo(function GappersView({
                     { label: "Premkt %", key: "premktPct" as const },
                     { label: "Premkt Vol", key: "premktVol" as const },
                     { label: "Daily %", key: "dailyPct" as const },
+                    ...(ibkrLive ? [{ label: "Live $", key: null as null }] : []),
                     { label: "ADR%", key: "adr" as const },
                     { label: "MktCap", key: "mcap" as const },
                     { label: "Setup", key: "setup" as const },
@@ -4161,6 +4807,26 @@ const GappersView = memo(function GappersView({
                       </td>
                       <td className="border-b border-terminal-border/60 px-2 py-2 text-center tabular-nums text-slate-300">{gapFmtVolShares(pmVol)}</td>
                       <td className={`border-b border-terminal-border/60 px-2 py-2 text-center tabular-nums ${pctClass(dailyChg ?? 0)}`}>{gapFmtPctSigned(dailyChg, 2)}</td>
+                      {ibkrLive && (() => {
+                        const q = symUs ? gapperQuotes[symUs.toUpperCase()] : null;
+                        const chgCls = q?.change_pct == null ? "text-slate-500" : q.change_pct >= 0 ? "text-emerald-400" : "text-rose-400";
+                        return (
+                          <td className="border-b border-terminal-border/60 px-2 py-2 text-center align-middle">
+                            {q ? (
+                              <div className="flex flex-col items-center leading-none">
+                                <span className="font-mono text-[11px] text-slate-200 tabular-nums">
+                                  {q.last != null ? `$${q.last.toFixed(2)}` : "—"}
+                                </span>
+                                <span className={`font-mono text-[10px] tabular-nums ${chgCls}`}>
+                                  {q.change_pct != null ? (q.change_pct >= 0 ? "+" : "") + q.change_pct.toFixed(1) + "%" : ""}
+                                </span>
+                              </div>
+                            ) : (
+                              <span className="text-slate-600">—</span>
+                            )}
+                          </td>
+                        );
+                      })()}
                       <td className="border-b border-terminal-border/60 px-2 py-2 text-center tabular-nums text-slate-300">{adr != null ? `${adr.toFixed(1)}%` : "—"}</td>
                       <td className="border-b border-terminal-border/60 px-2 py-2 text-center text-slate-300">
                         <div className="flex flex-col items-center leading-tight">
@@ -4221,7 +4887,7 @@ export function ThemeDashboard() {
     };
   }, []);
 
-  const [tab, setTab] = useState<"scanner" | "gappers" | "breadth" | "rotation">("scanner");
+  const [tab, setTab] = useState<"scanner" | "gappers" | "breadth" | "rotation" | "ibkr">("scanner");
   const [focusTicker, setFocusTicker] = useState<string | null>(null);
   const [focusTickerMeta, setFocusTickerMeta] = useState<TickerDrawerMeta | null>(null);
   const [watchlistOpen, setWatchlistOpen] = useState(false);
@@ -4237,6 +4903,7 @@ export function ThemeDashboard() {
     updateNote,
   } = useWatchlist();
   const marketStatus = useMarketStatus();
+  const ibkr = useIbkrStatus();
   const { payload, error, reload: reloadThemes, lastUpdatedAt, loading, loadingSince, pollMs } = useThemesPayload();
   // Legacy RSS-based briefs kept alive for data continuity (not rendered in main UI).
   usePremarketBrief();
@@ -4392,6 +5059,24 @@ export function ThemeDashboard() {
                 <TapeInline tape={payload?.tape} />
               </div>
             </div>
+            {/* IBKR data source badge */}
+            {!ibkr.checking && (
+              <div
+                title={ibkr.live
+                  ? "Connected to IBKR Client Portal — real-time data"
+                  : (ibkr.error ?? "IBKR gateway not running — showing delayed data")}
+                className={`hidden items-center gap-1.5 rounded-lg border px-2.5 py-1.5 sm:flex ${
+                  ibkr.live
+                    ? "border-emerald-600/40 bg-emerald-950/60 text-emerald-400"
+                    : "border-amber-700/40 bg-amber-950/60 text-amber-400"
+                }`}
+              >
+                <span className={`inline-flex h-1.5 w-1.5 rounded-full ${ibkr.live ? "bg-emerald-400" : "bg-amber-400"}`} />
+                <span className="font-mono text-[10px] font-semibold tracking-wide">
+                  {ibkr.live ? "LIVE · IBKR" : "DELAYED · 15 min"}
+                </span>
+              </div>
+            )}
             <div className="ml-auto hidden items-center gap-3 rounded-xl border border-terminal-border bg-terminal-bg px-3 py-2 sm:flex">
               <div className="flex flex-col leading-tight">
                 <span className="flex items-center gap-2 t-label">
@@ -4459,6 +5144,21 @@ export function ThemeDashboard() {
             >
               <BarChart3 className="h-3.5 w-3.5" aria-hidden />
               Rotation
+            </button>
+            <button
+              type="button"
+              onClick={() => setTab("ibkr")}
+              aria-pressed={tab === "ibkr"}
+              className={`flex items-center gap-1.5 rounded-full border px-4 py-2 t-data font-semibold transition-colors ${
+                tab === "ibkr"
+                  ? "border-emerald-600/40 bg-emerald-950/60 text-emerald-300"
+                  : ibkr.live
+                  ? "border-emerald-800/40 bg-emerald-950/20 text-emerald-500 hover:text-emerald-300"
+                  : "border-terminal-border bg-terminal-bg text-slate-500 hover:border-slate-600 hover:text-white"
+              }`}
+            >
+              <span className={`inline-flex h-1.5 w-1.5 rounded-full ${ibkr.live ? "bg-emerald-400 animate-pulse" : "bg-slate-600"}`} />
+              IBKR
             </button>
 
             <div className="ml-auto flex flex-wrap items-center gap-2">
@@ -4632,6 +5332,7 @@ export function ThemeDashboard() {
                       setFocusTicker(t);
                       setFocusTickerMeta(meta ?? null);
                     }}
+                    ibkrLive={ibkr.live}
                   />
                 ) : (
                   <div className="flex h-full items-center justify-center text-slate-500">Loading scanner…</div>
@@ -4641,6 +5342,17 @@ export function ThemeDashboard() {
               <MarketBreadth />
             ) : tab === "rotation" ? (
               <RotationView />
+            ) : tab === "ibkr" ? (
+              <IbkrView
+                ibkrLive={ibkr.live}
+                ibkrError={ibkr.error}
+                onSelectTicker={(t) => {
+                  setFocusTicker(t);
+                  setFocusTickerMeta(null);
+                }}
+                watchlisted={watchlisted}
+                onToggleWatchlist={handleToggleWatchlist}
+              />
             ) : (
               <GappersView
                 gappers={gappers}
@@ -4656,6 +5368,7 @@ export function ThemeDashboard() {
                 }}
                 watchlisted={watchlisted}
                 onToggleWatchlist={handleToggleWatchlist}
+                ibkrLive={ibkr.live}
               />
             )}
           </div>
@@ -4667,6 +5380,7 @@ export function ThemeDashboard() {
               loading={watchLoading}
               error={watchLoadError}
               onReload={() => void reloadWatchlist()}
+              ibkrLive={ibkr.live}
               onRemove={async (t) => {
                 try {
                   setWatchActionErr(null);
@@ -4693,6 +5407,7 @@ export function ThemeDashboard() {
             <TickerDrawer
               ticker={focusTicker}
               meta={focusTickerMeta}
+              ibkrLive={ibkr.live}
               onClose={() => {
                 setFocusTicker(null);
                 setFocusTickerMeta(null);

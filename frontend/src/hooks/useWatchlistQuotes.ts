@@ -3,7 +3,7 @@ import { API_BASE_URL } from "../lib/apiBase";
 
 type QuoteMap = Record<string, { close: number | null; today_return_pct: number | null }>;
 
-export function useWatchlistQuotes(tickers: string[], refreshMs: number) {
+export function useWatchlistQuotes(tickers: string[], refreshMs: number, ibkrLive = false) {
   const [quotes, setQuotes] = useState<QuoteMap>({});
 
   const sortedTickers = useMemo(
@@ -11,7 +11,37 @@ export function useWatchlistQuotes(tickers: string[], refreshMs: number) {
     [tickers]
   );
 
-  const fetchQuotes = useCallback(async () => {
+  // ── IBKR live path: one batch call for all tickers ──────────────────────
+  const fetchIbkrQuotes = useCallback(async () => {
+    if (!sortedTickers.length) return;
+    const slice = sortedTickers.slice(0, 20); // IBKR endpoint cap
+    try {
+      const r = await fetch(
+        `${API_BASE_URL}/api/ibkr/quotes?symbols=${encodeURIComponent(slice.join(","))}`
+      );
+      if (!r.ok) return;
+      const data = (await r.json()) as {
+        ok: boolean;
+        live: boolean;
+        quotes?: Array<{ ticker: string; last: number | null; change_pct: number | null }>;
+      };
+      if (!data.ok || !data.live || !data.quotes) return;
+      const results: QuoteMap = {};
+      for (const q of data.quotes) {
+        if (!q.ticker) continue;
+        results[q.ticker.toUpperCase()] = {
+          close: q.last ?? null,
+          today_return_pct: q.change_pct ?? null,
+        };
+      }
+      setQuotes((prev) => ({ ...prev, ...results }));
+    } catch {
+      /* stale quote ok */
+    }
+  }, [sortedTickers]);
+
+  // ── Delayed path: per-ticker yfinance calls ──────────────────────────────
+  const fetchDelayedQuotes = useCallback(async () => {
     if (!sortedTickers.length) return;
     const slice = sortedTickers.slice(0, 40);
     const results: QuoteMap = {};
@@ -32,6 +62,8 @@ export function useWatchlistQuotes(tickers: string[], refreshMs: number) {
     );
     setQuotes((prev) => ({ ...prev, ...results }));
   }, [sortedTickers]);
+
+  const fetchQuotes = ibkrLive ? fetchIbkrQuotes : fetchDelayedQuotes;
 
   useEffect(() => {
     void fetchQuotes();

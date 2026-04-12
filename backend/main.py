@@ -15,6 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from routers.rotation import router as _rotation_router
 from routers.rs_skyte import router as _rs_skyte_router
 from routers.watchlist import router as _watchlist_router
+from routers.ibkr import router as _ibkr_router
 
 from time import monotonic
 
@@ -274,6 +275,7 @@ app = FastAPI(title="POWER-THEME API", version="0.1.0")
 app.include_router(_rotation_router)
 app.include_router(_rs_skyte_router)
 app.include_router(_watchlist_router)
+app.include_router(_ibkr_router)
 
 
 @app.get("/api/startup-diagnostics")
@@ -547,11 +549,12 @@ async def push_leaderboard(
 
 
 _INTEL_REFRESH_TASK: asyncio.Task[None] | None = None
+_IBKR_KEEPALIVE_TASK: asyncio.Task[None] | None = None
 
 
 @app.on_event("startup")
 async def _startup() -> None:
-    global _UNIVERSE_TASK, _PRE_NEWS_TASK, _POST_NEWS_TASK, _THEMES_TASK
+    global _UNIVERSE_TASK, _PRE_NEWS_TASK, _POST_NEWS_TASK, _THEMES_TASK, _IBKR_KEEPALIVE_TASK
     await _THEME_UNIVERSE.load()
     # Refresh movers every 30 minutes (prices change; tickers-only automation).
     _UNIVERSE_TASK = asyncio.create_task(scheduled_refresh_loop(_THEME_UNIVERSE, every_sec=30 * 60))
@@ -560,11 +563,20 @@ async def _startup() -> None:
     _THEMES_TASK = asyncio.create_task(_themes_refresh_loop())
     # Start the APScheduler cron for Intelligence briefs (08:03 / 16:55 ET Mon-Fri).
     start_scheduler()
+    # IBKR keep-alive loop (tickles session every 55 s; harmless if gateway not running).
+    try:
+        try:
+            from backend.ibkr import run_keepalive_loop as _ibkr_loop
+        except ImportError:
+            from ibkr import run_keepalive_loop as _ibkr_loop  # type: ignore[no-redef]
+        _IBKR_KEEPALIVE_TASK = asyncio.create_task(_ibkr_loop())
+    except Exception as _e:
+        logger.warning("IBKR keep-alive task not started: %s", _e)
 
 
 @app.on_event("shutdown")
 async def _shutdown() -> None:
-    global _UNIVERSE_TASK, _PRE_NEWS_TASK, _POST_NEWS_TASK, _THEMES_TASK
+    global _UNIVERSE_TASK, _PRE_NEWS_TASK, _POST_NEWS_TASK, _THEMES_TASK, _IBKR_KEEPALIVE_TASK
     stop_scheduler()
     if _UNIVERSE_TASK is not None:
         _UNIVERSE_TASK.cancel()
@@ -578,6 +590,9 @@ async def _shutdown() -> None:
     if _THEMES_TASK is not None:
         _THEMES_TASK.cancel()
         _THEMES_TASK = None
+    if _IBKR_KEEPALIVE_TASK is not None:
+        _IBKR_KEEPALIVE_TASK.cancel()
+        _IBKR_KEEPALIVE_TASK = None
 
 
 @app.get("/api/news/premarket")
