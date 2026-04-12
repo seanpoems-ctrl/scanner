@@ -115,6 +115,16 @@ _FILTER_MAP: dict[str, tuple[str, bool]] = {
 
 VALID_FILTERS: frozenset[str] = frozenset(_FILTER_MAP)
 
+# Post-fetch change_pct guard thresholds for up/dn filters.
+# Stocks that slip below/above these thresholds after intraday moves are dropped.
+# Keys match filter_key; None means no threshold enforcement.
+_CHANGE_THRESHOLD: dict[str, tuple[str, float]] = {
+    # (direction, threshold)  direction: "min" → change_pct >= threshold
+    #                                    "max" → change_pct <= threshold
+    "up4":     ("min",  3.0),   # must still be up ≥3 % (allows minor intraday drift)
+    "dn4":     ("max", -3.0),   # must still be down ≤-3 %
+}
+
 _FINVIZ_BASE = "https://finviz.com"
 _MAX_PAGES = 25          # up to 500 stocks
 _YFINANCE_BATCH_CAP = 300
@@ -273,6 +283,11 @@ def _parse_screener_rows(html: str) -> list[dict[str, Any]]:
       9: change %     (e.g. "+5.23%")
      10: volume       (share volume, comma-formatted)
 
+    IMPORTANT: use recursive=False when collecting <td> children of each <tr>.
+    Finviz wraps the screener in nested tables; recursive=True would pull in
+    inner-table cells and shift column indices, causing wrong company names,
+    prices, and change values.
+
     Returns a list of raw row dicts. All string values are unvalidated — callers
     must apply type-parsing and filtering.
     """
@@ -280,7 +295,9 @@ def _parse_screener_rows(html: str) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
 
     for tr in soup.find_all("tr"):
-        tds = tr.find_all("td")
+        # Use recursive=False to get only direct <td> children.
+        # Recursive search pulls nested-table cells and shifts column offsets.
+        tds = tr.find_all("td", recursive=False)
         if len(tds) < 11:
             continue
 
@@ -350,7 +367,13 @@ def _compute_adr_batch_sync(tickers: list[str]) -> dict[str, float | None]:
 
     Caps input at _YFINANCE_BATCH_CAP to avoid Yahoo throttling.
     Returns a dict mapping ticker → adr_pct (None on error).
+
+    yfinance ≥1.0 always returns a MultiIndex DataFrame with Level-0 = metric
+    (Close/High/Low/…) and Level-1 = ticker, regardless of how many tickers are
+    downloaded.  Access pattern: df["High"][tkr]  (metric first, then ticker).
     """
+    import pandas as pd  # local import — pandas is always available
+
     result: dict[str, float | None] = {t: None for t in tickers}
     if not tickers:
         return result
@@ -367,9 +390,7 @@ def _compute_adr_batch_sync(tickers: list[str]) -> dict[str, float | None]:
                 tickers=chunk,
                 period="30d",
                 interval="1d",
-                group_by="ticker",
                 auto_adjust=True,
-                threads=True,
                 progress=False,
             )
         except Exception as exc:
@@ -379,15 +400,37 @@ def _compute_adr_batch_sync(tickers: list[str]) -> dict[str, float | None]:
         if df is None or getattr(df, "empty", True):
             continue
 
-        is_single = len(chunk) == 1
+        # Detect column layout:
+        #   MultiIndex (metric, ticker)  → yfinance ≥1.0 style; access df["High"][tkr]
+        #   MultiIndex (ticker, metric)  → old group_by="ticker" style; access df[tkr]["High"]
+        #   Flat Index                   → single-ticker, older yfinance; access df["High"]
+        is_multi = isinstance(df.columns, pd.MultiIndex)
+        if is_multi:
+            l0 = set(df.columns.get_level_values(0))
+            l1 = set(df.columns.get_level_values(1))
+            # yfinance ≥1.0: L0 = metrics, L1 = tickers
+            metric_first = "High" in l0
+        else:
+            metric_first = None  # flat columns
 
         for tkr in chunk:
             try:
-                if is_single:
+                if not is_multi:
+                    # Flat: single-ticker flat DataFrame (very old yfinance / edge case)
                     high  = df["High"].dropna()
                     low   = df["Low"].dropna()
                     close = df["Close"].dropna()
+                elif metric_first:
+                    # yfinance ≥1.0: (metric, ticker)
+                    if tkr not in l1:
+                        continue
+                    high  = df["High"][tkr].dropna()
+                    low   = df["Low"][tkr].dropna()
+                    close = df["Close"][tkr].dropna()
                 else:
+                    # Legacy group_by="ticker": (ticker, metric)
+                    if tkr not in l0:
+                        continue
                     high  = df[tkr]["High"].dropna()
                     low   = df[tkr]["Low"].dropna()
                     close = df[tkr]["Close"].dropna()
@@ -473,9 +516,11 @@ async def fetch_breadth_stock_list(
                         continue
                     seen_tickers.add(tkr)
 
-                    # cap_midover in the Finviz URL handles the market-cap floor
-                    # server-side; we still parse for the display value.
+                    # cap_midover in the Finviz URL applies a broad server-side
+                    # floor (~$300M).  We enforce the stricter min_cap_b here.
                     cap_b = _parse_market_cap_b(row["market_cap_raw"])
+                    if cap_b is not None and cap_b < min_cap_b:
+                        continue
                     price = _parse_price(row["price_raw"])
                     change = _parse_pct(row["change_raw"])
                     vol = _parse_volume_shares(row["volume_raw"])
@@ -523,6 +568,32 @@ async def fetch_breadth_stock_list(
             key=lambda s: (s["change_pct"] is None, s["change_pct"] or 0.0),
             reverse=not sort_asc,
         )
+
+        # ── 6b: Post-fetch threshold guard ───────────────────────────────────
+        # Finviz applies its change filter at page-render time; intraday moves
+        # can cause a stock to drift across the 4 % line by the time we display
+        # it.  We also guard against any residual parsing artefacts.
+        threshold_rule = _CHANGE_THRESHOLD.get(filter_key)
+        if threshold_rule:
+            direction, threshold = threshold_rule
+            before = len(qualifying)
+            if direction == "min":
+                qualifying = [
+                    s for s in qualifying
+                    if s["change_pct"] is None or s["change_pct"] >= threshold
+                ]
+            else:  # "max"
+                qualifying = [
+                    s for s in qualifying
+                    if s["change_pct"] is None or s["change_pct"] <= threshold
+                ]
+            dropped = before - len(qualifying)
+            if dropped:
+                logger.debug(
+                    "breadth_stocks: threshold guard dropped %d stocks for %s "
+                    "(change_pct %s %.1f%%)",
+                    dropped, filter_key, direction, threshold,
+                )
 
         # ── 7: Cache ─────────────────────────────────────────────────────────
         _CACHE[cache_key] = (monotonic(), qualifying)
