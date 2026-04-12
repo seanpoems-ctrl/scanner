@@ -997,6 +997,51 @@ async def get_market_breadth_ext() -> dict:
     return await _get_ext()
 
 
+@app.post("/api/market-breadth/prewarm")
+async def post_market_breadth_prewarm(
+    x_push_secret: str | None = Header(default=None, alias="X-Push-Secret"),
+) -> dict:
+    """
+    Externally-triggered cache pre-warm for all breadth stock list filters.
+
+    Called by cron-job.org at 4:35 PM ET Mon–Fri (5 min after Finviz finalises
+    closing prices).  This wakes the Render dyno and populates the in-memory
+    cache so the first user click on any drill-down modal is instant.
+
+    Requires the X-Push-Secret header to match the PUSH_SECRET env var
+    (same secret used by the leaderboard push endpoint).
+    """
+    if not _PUSH_SECRET:
+        raise HTTPException(status_code=503, detail="PUSH_SECRET not configured on server.")
+    if x_push_secret != _PUSH_SECRET:
+        raise HTTPException(status_code=401, detail="Invalid push secret.")
+
+    try:
+        try:
+            from backend.breadth_stocks import fetch_breadth_stock_list, VALID_FILTERS
+        except ImportError:
+            from breadth_stocks import fetch_breadth_stock_list, VALID_FILTERS  # type: ignore[no-redef]
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Import error: {exc}")
+
+    filters = sorted(VALID_FILTERS)
+    logger.info("breadth prewarm: starting for %d filters via HTTP trigger", len(filters))
+
+    results: dict[str, Any] = {}
+    for fk in filters:
+        try:
+            stocks = await fetch_breadth_stock_list(fk)
+            results[fk] = len(stocks)
+            logger.info("breadth prewarm: [%s] → %d stocks cached", fk, len(stocks))
+        except Exception as exc:
+            results[fk] = f"error: {exc}"
+            logger.warning("breadth prewarm: [%s] failed: %s", fk, exc)
+        await asyncio.sleep(2.0)
+
+    logger.info("breadth prewarm: complete — %s", results)
+    return {"ok": True, "results": results}
+
+
 @app.get("/api/industry/subindustry-movers")
 async def get_industry_subindustry_movers(industry: str, parent: str | None = None) -> dict:
     """
