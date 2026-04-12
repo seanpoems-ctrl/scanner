@@ -17,6 +17,7 @@ type Props = {
   onRemove: (ticker: string) => Promise<void>;
   onUpdateNote: (ticker: string, note: string) => Promise<void>;
   onSelectTicker: (ticker: string) => void;
+  ibkrLive?: boolean;
 };
 
 function WatchlistRow({
@@ -105,12 +106,17 @@ export function WatchlistDrawer({
   onRemove,
   onUpdateNote,
   onSelectTicker,
+  ibkrLive = false,
 }: Props) {
   const marketOpen = marketStatus?.session === "open";
-  const refreshMs = marketOpen ? 60_000 : 5 * 60_000;
+  // When IBKR is live refresh every 30s during market hours, otherwise 60s / 5m
+  const refreshMs = ibkrLive
+    ? marketOpen ? 30_000 : 60_000
+    : marketOpen ? 60_000 : 5 * 60_000;
   const quotes = useWatchlistQuotes(
     items.map((i) => i.ticker),
-    refreshMs
+    refreshMs,
+    ibkrLive
   );
 
   return (
@@ -127,13 +133,18 @@ export function WatchlistDrawer({
               <div className="flex items-center gap-2">
                 <h2 className="t-page">Watchlist</h2>
                 <span className="t-micro text-slate-500">
-                  {marketOpen ? (
+                  {ibkrLive ? (
                     <span className="flex items-center gap-1">
                       <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                      Live · refreshes 60s
+                      {marketOpen ? "IBKR Live · 30s" : "IBKR Live · 60s"}
+                    </span>
+                  ) : marketOpen ? (
+                    <span className="flex items-center gap-1">
+                      <span className="inline-block h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse" />
+                      Delayed · 60s
                     </span>
                   ) : (
-                    "refreshes 5m"
+                    "Delayed · 5m"
                   )}
                 </span>
               </div>

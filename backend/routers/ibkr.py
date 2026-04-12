@@ -202,3 +202,70 @@ async def ibkr_calendar() -> dict[str, Any]:
         "events": events,
         "fetched_at_utc": _now_utc(),
     }
+
+
+# ── Market Scanner ────────────────────────────────────────────────────────────
+
+@router.get("/scanner")
+async def ibkr_scanner(
+    scan_type: str = Query("TOP_PERC_GAIN", description="Scanner type: TOP_PERC_GAIN, TOP_PERC_LOSE, MOST_ACTIVE, TOP_TRADE_RATE, TOP_VOLUME_RATE"),
+    location: str = Query("STK.US.MAJOR", description="Market location"),
+    limit: int = Query(25, ge=1, le=50),
+) -> dict[str, Any]:
+    """
+    Run an IBKR market scanner.
+    scan_type options: TOP_PERC_GAIN, TOP_PERC_LOSE, MOST_ACTIVE, TOP_TRADE_RATE, HOT_BY_VOLUME
+    """
+    m = _ibkr()
+    status = await m.get_status()
+    if not status.live:
+        return {
+            "ok": False,
+            "live": False,
+            "results": [],
+            "error": status.error or "IBKR session not active",
+            "fetched_at_utc": _now_utc(),
+        }
+
+    try:
+        data = await m._post(
+            "/v1/api/iserver/scanner/run",
+            json={
+                "instrument": "STK",
+                "location": location,
+                "type": scan_type,
+                "filter": [],
+            },
+        )  # _post is a module-level function in ibkr.py, callable as m._post via the module reference
+        contracts = data if isinstance(data, list) else (data.get("contracts", []) if isinstance(data, dict) else [])
+        results = []
+        for item in contracts[:limit]:
+            if not isinstance(item, dict):
+                continue
+            results.append({
+                "conid": item.get("con_id") or item.get("conid"),
+                "ticker": item.get("symbol", ""),
+                "company": item.get("company", ""),
+                "last": item.get("last_price"),
+                "change_pct": item.get("change_perc"),
+                "volume": item.get("volume"),
+                "sector": item.get("sector", ""),
+                "exchange": item.get("listing_exchange", ""),
+            })
+        return {
+            "ok": True,
+            "live": True,
+            "scan_type": scan_type,
+            "count": len(results),
+            "results": results,
+            "fetched_at_utc": _now_utc(),
+        }
+    except Exception as exc:
+        logger.warning("ibkr scanner failed: %s", exc)
+        return {
+            "ok": False,
+            "live": True,
+            "results": [],
+            "error": str(exc),
+            "fetched_at_utc": _now_utc(),
+        }
