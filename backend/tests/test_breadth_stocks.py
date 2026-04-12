@@ -350,9 +350,11 @@ async def test_fetch_cache_hit_skips_network():
         r2 = await fetch_breadth_stock_list("up4", min_cap_b=1.0)
 
     assert r1 == r2
-    # httpx client get should have been called exactly 2 times (page 1 + empty page 2),
-    # not 4 times — proving cache was used on second call.
-    assert mock_client.get.call_count == 2
+    # The early-stop logic breaks as soon as a page returns fewer than 20 rows,
+    # so the 3-row test fixture causes exactly 1 fetch (not 2).
+    # The second call to fetch_breadth_stock_list should return from cache —
+    # proving that get() was NOT called a second time (still 1, not 2).
+    assert mock_client.get.call_count == 1
 
 
 @pytest.mark.anyio
